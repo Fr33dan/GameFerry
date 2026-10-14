@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+TestResults/
+publish/
+site/
+nkit3-attempt.zip

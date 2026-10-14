@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- NKit.dll targets .NET Framework 4.6.1, so it is hosted in its own .NET Framework process. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>GameFerry.NKitHost</RootNamespace>
+    <AssemblyName>GameFerry.NKitHost</AssemblyName>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Prefer32Bit>false</Prefer32Bit>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="NKit">
+      <HintPath>..\..\lib\NKit\NKit.dll</HintPath>
+    </Reference>
+    <Reference Include="SharpCompress">
+      <HintPath>..\..\lib\NKit\SharpCompress.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Configuration" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- NKit reads its settings from NKit.dll.config beside NKit.dll. -->
+    <None Include="..\..\lib\NKit\NKit.dll.config" Link="NKit.dll.config" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

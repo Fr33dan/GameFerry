@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+
+  <!--
+    The engine as the web version runs it: compiled to WebAssembly ahead of time and loaded in a Web Worker, where it
+    reads the chosen files synchronously and hands back the WBFS file in pieces for the page to write. Building it
+    needs the wasm-tools workload; Native\ is the LZMA SDK's C decoder, linked into the runtime.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <RunAOTCompilation>true</RunAOTCompilation>
+    <EmccCompileOptimizationFlag>-O3</EmccCompileOptimizationFlag>
+    <WasmEnableThreads>false</WasmEnableThreads>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GameFerry.Engine\GameFerry.Engine.csproj" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.0" />
+    <NativeFileReference Include="Native\lzma\LzmaDec.c" />
+    <NativeFileReference Include="Native\lzma\Lzma2Dec.c" />
+    <NativeFileReference Include="Native\gflzma.c" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,135 @@
+# Tests GameFerry and builds both versions for every pull request and every push to main; a run's artifacts hold the
+# two Windows executables, ready to try. Pushes to main also publish the web version with GitHub Pages
+# (Settings > Pages > Source: GitHub Actions) and, when main has a version that hasn't been released yet
+# (<Version> in Directory.Build.props), release the executables on GitHub as v<Version>.
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A new push to a pull request replaces the run for the old one. Runs on main always finish, so a release or a
+  # deployment is never cut off halfway.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    # The tests build the desktop core, which carries a .NET Framework helper.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet test tests/GameFerry.Tests/GameFerry.Tests.csproj -c Release
+
+  desktop:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Read the version
+        id: version
+        shell: pwsh
+        run: |
+          $version = dotnet msbuild src/GameFerry.App/GameFerry.App.csproj -nologo -getProperty:Version
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "Directory.Build.props has an unexpected <Version>: '$version'" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - run: dotnet publish src/GameFerry.App -p:PublishProfile=Portable
+      - run: dotnet publish src/GameFerry.Cli -p:PublishProfile=Portable
+      - name: Checksums
+        shell: pwsh
+        working-directory: publish
+        run: |
+          $lines = Get-FileHash GameFerry.exe, ferry.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path -Leaf $_.Path)" }
+          [IO.File]::WriteAllText("$PWD/SHA256SUMS.txt", ($lines -join "`n") + "`n")
+          $lines
+      - name: Say whether merging this makes a release
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "$TAG has been released already, so merging this makes no release. To release it, raise \`<Version>\` in Directory.Build.props." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Merging this releases **$TAG**." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: GameFerry-${{ steps.version.outputs.version }}
+          path: |
+            publish/GameFerry.exe
+            publish/ferry.exe
+            publish/SHA256SUMS.txt
+          if-no-files-found: error
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet workload install wasm-tools
+      - run: pwsh ./scripts/build-web.ps1 -Output site
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [test, web]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
+
+  release:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [test, desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github
+      - uses: actions/download-artifact@v8
+        with:
+          name: GameFerry-${{ needs.desktop.outputs.version }}
+          path: release
+      - name: Release, unless this version has been released already
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.desktop.outputs.version }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "$TAG has been released already, so this made no release. To release, raise \`<Version>\` in Directory.Build.props." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          prerelease=()
+          if [[ "$TAG" == *-* ]]; then prerelease=(--prerelease); fi
+          gh release create "$TAG" release/GameFerry.exe release/ferry.exe release/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "GameFerry ${TAG#v}" \
+            --notes "$(cat .github/release-notes.md)" --generate-notes "${prerelease[@]}"
+          echo "Released **$TAG**: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"

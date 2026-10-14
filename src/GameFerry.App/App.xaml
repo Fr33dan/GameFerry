@@ -1,0 +1,9 @@
+<Application x:Class="GameFerry.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ThemeMode="System"
+             Startup="OnStartup">
+    <Application.Resources>
+        <Thickness x:Key="PanelGap">0,0,0,8</Thickness>
+    </Application.Resources>
+</Application>

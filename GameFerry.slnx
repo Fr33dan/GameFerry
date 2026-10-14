@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/GameFerry.App/GameFerry.App.csproj" />
+    <Project Path="src/GameFerry.Cli/GameFerry.Cli.csproj" />
+    <Project Path="src/GameFerry.Core/GameFerry.Core.csproj" />
+    <Project Path="src/GameFerry.Engine/GameFerry.Engine.csproj" />
+    <Project Path="src/GameFerry.NKitHost/GameFerry.NKitHost.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/GameFerry.Tests/GameFerry.Tests.csproj" />
+  </Folder>
+</Solution>

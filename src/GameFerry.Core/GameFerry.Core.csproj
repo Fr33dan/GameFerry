@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>GameFerry.Core</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="GameFerry.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GameFerry.Engine\GameFerry.Engine.csproj" />
+  </ItemGroup>
+
+  <!--
+    NKit runs in a separate .NET Framework helper process (GameFerry.NKitHost). Its files are carried inside this
+    assembly and unpacked on first use, so each application can be published as a single file.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\GameFerry.NKitHost\GameFerry.NKitHost.csproj"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true"
+                      GlobalPropertiesToRemove="TargetFramework;RuntimeIdentifier;SelfContained;PublishSingleFile;PublishProfile"
+                      Private="false" />
+  </ItemGroup>
+
+  <Target Name="EmbedNKitHost" DependsOnTargets="ResolveProjectReferences" BeforeTargets="PrepareResources">
+    <ItemGroup>
+      <NKitHostFile Include="..\GameFerry.NKitHost\bin\$(Configuration)\net48\*.exe" />
+      <NKitHostFile Include="..\GameFerry.NKitHost\bin\$(Configuration)\net48\*.dll" />
+      <NKitHostFile Include="..\GameFerry.NKitHost\bin\$(Configuration)\net48\*.config" />
+      <EmbeddedResource Include="@(NKitHostFile)" LogicalName="nkithost/%(Filename)%(Extension)" Type="Non-Resx" WithCulture="false" />
+    </ItemGroup>
+    <Error Condition="'@(NKitHostFile)' == ''" Text="The NKit helper has not been built, so it cannot be embedded." />
+  </Target>
+
+</Project>

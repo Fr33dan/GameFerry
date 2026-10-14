@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>ferry</AssemblyName>
+    <ApplicationIcon>..\..\assets\app.ico</ApplicationIcon>
+    <RootNamespace>GameFerry.Cli</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GameFerry.Core\GameFerry.Core.csproj" />
+  </ItemGroup>
+
+</Project>

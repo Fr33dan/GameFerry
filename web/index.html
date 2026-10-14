@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GameFerry</title>
+  <meta name="description" content="Copy NKit Wii games to an SD card or USB drive as WBFS files, right in the browser.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="icon.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <img src="icon.png" alt="" width="44" height="44">
+    <div>
+      <h1>GameFerry</h1>
+      <p>Copies Wii games to an SD card or USB drive, ready for USB Loader GX, WiiFlow and the like. Nothing is uploaded: the games never leave your computer.</p>
+    </div>
+  </header>
+
+  <div id="unsupported" class="banner" hidden>
+    GameFerry needs a browser that can write to folders on your computer: Chrome, Edge, Brave or Opera, on Windows, macOS, Linux or ChromeOS. Firefox and Safari can't do this yet.
+  </div>
+
+  <div id="insecure" class="banner" hidden>
+    Browsers only let a page write to folders when it is opened over <code>https://</code>, or from the same computer as <code>http://localhost</code>. This page was opened from <code id="insecure-origin"></code>, so that is switched off.
+  </div>
+
+  <main id="app">
+    <section class="panel list-panel" aria-labelledby="games-title">
+      <div class="panel-head">
+        <h2 id="games-title">Games</h2>
+        <div class="actions">
+          <button id="reconnect-source" class="secondary" hidden></button>
+          <button id="pick-source">Choose folder…</button>
+          <button id="pick-files" class="secondary">Add files…</button>
+        </div>
+      </div>
+      <p class="hint" id="source-hint">NKit images (.nkit.iso), loose or packed in .7z archives.</p>
+      <div class="progress slim" id="read-progress" role="progressbar" aria-label="Reading the games" aria-valuemin="0" aria-valuemax="100" hidden><div id="read-bar"></div></div>
+      <div class="list-tools" id="list-tools" hidden>
+        <input type="search" id="filter" placeholder="Search by name or ID" aria-label="Search the games" autocomplete="off" spellcheck="false">
+        <span class="hint" id="filter-count"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="games">
+          <thead>
+            <tr>
+              <th class="check"><input type="checkbox" id="select-all" aria-label="Select every game"></th>
+              <th>Game</th>
+              <th>ID</th>
+              <th class="number">Size</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel list-panel" aria-labelledby="card-title">
+      <div class="panel-head">
+        <h2 id="card-title">Card</h2>
+        <div class="actions">
+          <button id="reconnect-card" class="secondary" hidden></button>
+          <button id="pick-card">Choose card…</button>
+        </div>
+      </div>
+      <p class="hint" id="card-hint">Choose the SD card or USB drive itself (its top folder). Games go in its wbfs folder, which is made if it isn't there.</p>
+      <div class="table-wrap">
+        <table id="card-games">
+          <thead>
+            <tr>
+              <th>Game</th>
+              <th>ID</th>
+              <th class="number">Size</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel keys" id="keys" hidden aria-labelledby="keys-title">
+      <h2 id="keys-title">Wii key</h2>
+      <p>This copy of GameFerry doesn't carry the Wii's common key, which every game is encrypted with. Choose the <code>keys.bin</code> from a BootMii backup of your console (it's usually on the SD card BootMii was run from). It stays in this browser.</p>
+      <div class="actions">
+        <button id="pick-keys">Choose keys.bin…</button>
+        <span id="keys-status" class="hint"></span>
+      </div>
+    </section>
+  </main>
+
+  <section class="panel copy" aria-label="Copy">
+    <div class="copy-bar">
+      <button id="start" class="primary" disabled>Copy</button>
+      <button id="cancel" class="secondary" hidden>Cancel</button>
+      <label class="option"><input type="checkbox" id="game-only"> Keep only the game partition</label>
+    </div>
+    <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-bar"></div></div>
+    <p id="status" class="status" aria-live="polite"></p>
+    <details>
+      <summary>Log</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
+
+  <footer>
+    Files over 4 GB are split for FAT32 cards (<code>.wbfs</code>, <code>.wbf1</code>). The update partition is left out, as loaders don't use it.
+    Built on <a href="https://github.com/Nanook/NKitv1">NKit</a> by Nanook (MIT) and the LZMA SDK by Igor Pavlov (public domain); <a href="licenses.txt">licences</a>.
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

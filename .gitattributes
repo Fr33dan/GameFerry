@@ -1,0 +1,7 @@
+* text=auto
+
+*.7z binary
+*.dll binary
+*.ico binary
+*.iso binary
+*.png binary
