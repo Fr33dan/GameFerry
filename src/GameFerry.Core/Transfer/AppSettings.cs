@@ -43,8 +43,11 @@ public sealed class AppSettings
 
     public SplitMode Split { get; set; } = SplitMode.Auto;
 
-    /// <summary>Re-read every game from the target after writing and compare it with what was sent.</summary>
-    public bool VerifyAfterWrite { get; set; } = true;
+    /// <summary>
+    /// Re-read every game from the target after writing and compare it with what was sent. Off by default: it takes
+    /// about as long again, and a bad copy shows up anyway as a game that won't start.
+    /// </summary>
+    public bool VerifyAfterWrite { get; set; }
 
     /// <summary>Have NKit re-read the rebuilt ISO from disk as well (it always checks the checksum while building).</summary>
     public bool NKitFullVerify { get; set; }

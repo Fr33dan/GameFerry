@@ -87,7 +87,7 @@
                 </TextBlock>
 
                 <TextBlock Text="Checks and speed" Style="{StaticResource FieldLabel}" />
-                <CheckBox Content="Read each game back from the target after writing and compare it (recommended)"
+                <CheckBox Content="Read each game back from the target after writing and compare it (takes about as long again)"
                           IsChecked="{Binding VerifyAfterWrite}" />
                 <CheckBox Content="Have NKit re-read each rebuilt ISO from disk as well (slower)"
                           IsChecked="{Binding NKitFullVerify}" />

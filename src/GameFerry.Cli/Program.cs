@@ -19,7 +19,8 @@ const string Usage = """
             --partitions all|no-update|game   which disc partitions to keep (default: all)
             --split auto|always|never    split files at 4 GiB (default: auto = only where the file system needs it)
             --titles gametdb|disc|file   where folder names come from (default: gametdb)
-            --no-verify                  skip re-reading the written files from the target
+            --verify, --no-verify        re-read the written files from the target and compare them, or don't
+                                         (default: as in the app's Settings, where it is off unless switched on)
             --one-at-a-time              don't prepare the next game while the current one is being written
             --overwrite                  replace games that are already on the target
             --no-covers                  don't download cover art for the copied games

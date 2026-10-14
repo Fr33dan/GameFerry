@@ -84,7 +84,7 @@ public sealed class CoverDownloader
     public static HttpClient CreateHttpClient()
     {
         HttpClient http = new() { Timeout = TimeSpan.FromSeconds(30) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("GameFerry/0.1");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd($"GameFerry/{typeof(CoverDownloader).Assembly.GetName().Version?.ToString(3) ?? "0"}");
         return http;
     }
 
