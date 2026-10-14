@@ -535,6 +535,9 @@ async function copySelected() {
   $('cancel').hidden = false;
   refreshGames();
 
+  // Which code ran, in which browser: the first thing to know when a copy goes wrong.
+  log(`GameFerry ${versionText(await engine.about().catch(() => null))} in ${browserText()}`);
+
   const estimate = new Estimate(queue.map((i) => i.probe?.imageBytes ?? i.file?.size ?? 0));
   const root = /** @type {FileSystemDirectoryHandle} */ (await gamesRoot(state.card, true));
   const partitions = /** @type {HTMLInputElement} */ ($('game-only')).checked ? 'GameOnly' : 'RemoveUpdate';
@@ -570,6 +573,9 @@ async function copySelected() {
     };
     engine.onSaving = (fileName, done, total) => {
       setStatus(`${name}: the browser couldn't finish saving ${fileName}, so it is being saved again from what was written, ${Math.floor((done / Math.max(1, total)) * 100)}%`);
+    };
+    engine.onFinishing = (fileName) => {
+      setStatus(`${name}: finishing ${fileName}. The browser reads the whole file back before saving it, which takes a few minutes for a big game.`);
     };
 
     /** @type {import('./engine.js').TransferResult} */
@@ -626,6 +632,7 @@ async function copySelected() {
 
   engine.onProgress = null;
   engine.onSaving = null;
+  engine.onFinishing = null;
   state.copying = false;
   $('cancel').hidden = true;
   /** @type {HTMLElement} */ ($('progress-bar')).style.width = `${failed || state.cancelled ? estimate.fraction * 100 : 100}%`;
@@ -682,6 +689,23 @@ function explain(error) {
  */
 function isDrive(handle) {
   return /^[\\/]?$/.test(handle.name);
+}
+
+/**
+ * The engine's version with the commit it was built from, shortened: "0.1.0+154eb7d".
+ * @param {{version?: string, build?: string} | null} about
+ */
+function versionText(about) {
+  return (about?.build ?? about?.version ?? 'version unknown').replace(/\+([0-9a-f]{7})[0-9a-f]*$/i, '+$1');
+}
+
+/** The browser and its main version, such as "Microsoft Edge 141". */
+function browserText() {
+  /** @type {{brand: string, version: string}[]} */
+  // @ts-ignore: userAgentData is Chromium's.
+  const brands = navigator.userAgentData?.brands ?? [];
+  const brand = brands.find((b) => !/not.?a.?brand|chromium/i.test(b.brand)) ?? brands.find((b) => /chromium/i.test(b.brand));
+  return brand ? `${brand.brand} ${brand.version}` : navigator.userAgent;
 }
 
 /** "1 file", "1,456 files". @param {number} n @param {string} noun */
