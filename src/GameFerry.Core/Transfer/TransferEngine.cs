@@ -17,8 +17,8 @@ public delegate void TransferLog(string message, bool detail);
 
 /// <summary>
 /// Moves games to a target. Each game is prepared (extracted and rebuilt into a full ISO where needed), then
-/// written: padding is dropped, split WBFS files are written under temporary names, read back, and only then
-/// given their final names. While one game is being written, the next can already be prepared.
+/// written: padding is dropped, split WBFS files are written under temporary names, read back if verifying is on,
+/// and only then given their final names. While one game is being written, the next can already be prepared.
 /// </summary>
 public sealed class TransferEngine
 {

@@ -58,9 +58,9 @@ internal static class Commands
 
     public static async Task<int> TransferAsync(string[] args, CancellationToken cancellationToken)
     {
-        CliArguments parsed = CliArguments.Parse(args, "recurse", "no-verify", "one-at-a-time", "overwrite", "no-covers", "dry-run", "verbose");
+        CliArguments parsed = CliArguments.Parse(args, "recurse", "verify", "no-verify", "one-at-a-time", "overwrite", "no-covers", "dry-run", "verbose");
         parsed.AllowOnly(
-            "to", "recurse", "partitions", "split", "titles", "no-verify", "one-at-a-time", "overwrite",
+            "to", "recurse", "partitions", "split", "titles", "verify", "no-verify", "one-at-a-time", "overwrite",
             "no-covers", "loader", "cover-root", "nkit", "work", "dry-run", "verbose");
         if (parsed.Positional.Count == 0)
             throw new UsageException("Usage: ferry transfer <folder|file>... --to <drive|folder> [options]");
@@ -296,6 +296,8 @@ internal static class Commands
             settings.NKitFolder = nkit;
         if (parsed.Get("work") is { } work)
             settings.WorkFolder = work;
+        if (parsed.Has("verify"))
+            settings.VerifyAfterWrite = true;
         if (parsed.Has("no-verify"))
             settings.VerifyAfterWrite = false;
         if (parsed.Has("one-at-a-time"))

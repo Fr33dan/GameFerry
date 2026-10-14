@@ -81,7 +81,9 @@ Copies come out byte for byte the same as the desktop app's, apart from one regi
    and the Redump database.
 3. **Analyse** — every partition's file table is read to find the sectors that hold data; the rest is padding.
 4. **Write** — only the 2 MB blocks containing data are written, as `.wbfs` / `.wbf1` files under temporary names.
-5. **Verify** — the files are read back from the drive, bypassing the Windows cache, and compared with what was sent.
+5. **Verify** (only when switched on in Settings, or with `--verify`) — the files are read back from the drive,
+   bypassing the Windows cache, and compared with what was sent. This takes about as long again, and a bad copy shows
+   up anyway as a game that won't start, so it is off by default.
 6. **Commit** — the files get their real names and the work files are deleted.
 
 Cancelling, or a failure at any step, removes the unfinished game from the drive. Source files are never modified.
@@ -119,7 +121,7 @@ and more compact.
 | Folder names | GameTDB title | Or the title stored on the disc, or the source file name |
 | Cover art | Automatic | Loader detected from the drive; or WiiFlow, USB Loader GX, Configurable USB Loader, all, none |
 | Covers in the game lists | On | Front covers from GameTDB, kept on this PC |
-| Verify after writing | On | |
+| Verify after writing | Off | Reads every game back from the drive and compares it; takes about as long again |
 | Work folder | `%LOCALAPPDATA%\GameFerry\work` | Local drive; up to 24 GB while two dual-layer games overlap |
 
 Settings are saved in `%APPDATA%\GameFerry\settings.json`.
