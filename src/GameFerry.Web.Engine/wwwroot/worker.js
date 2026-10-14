@@ -102,7 +102,7 @@ async function commitParts() {
     } catch (error) {
       const problem = `${describe(error)} (after ${Math.round((performance.now() - started) / 1000)} s)`;
       const outcome = await saveAgain(name, target.sizes[part], writable);
-      if (outcome.saved) savedAgain.push({ name, problem });
+      if (outcome.saved) savedAgain.push({ name, problem, leftover: outcome.leftover });
       else unsaved.push({ name, swap: outcome.swap, emptyLeft: outcome.emptyLeft, problem: outcome.problem ? `${problem}; saving again: ${outcome.problem}` : problem });
     }
   }
@@ -111,15 +111,12 @@ async function commitParts() {
 
 /**
  * Closes a written file, which is when Chrome reads the whole file back (a Safe Browsing check) and then renames its
- * swap file. Before a big one it waits a little: that rename has failed on big files, maybe because something else,
- * such as antivirus, was still reading the freshly written file, and a head start for that costs little next to the
- * copy. The page is told, as the status would otherwise sit at 100% for minutes.
+ * swap file. That rename now and then fails, most often on big files; saveAgain copes with it. The page is told, as
+ * the status would otherwise sit at 100% for minutes.
  * @param {FileSystemWritableFileStream} writable @param {string} name @param {number} size
  */
 async function finish(writable, name, size) {
   postMessage({ kind: 'finishing', name, size });
-  const seconds = Math.min(30, Math.floor(size / 2 ** 30) * 5);
-  await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
   await writable.close();
 }
 
@@ -132,7 +129,7 @@ const stranded = new Set();
  * failed writable is kept until then, as Chrome deletes its swap file when it goes; if saving again fails too, it is
  * kept for good, so the swap file can be renamed by hand.
  * @param {string} name @param {number} size @param {FileSystemWritableFileStream} failed
- * @returns {Promise<{saved: boolean, swap: string | null, emptyLeft?: boolean, problem?: string}>}
+ * @returns {Promise<{saved: boolean, swap: string | null, leftover?: string | null, emptyLeft?: boolean, problem?: string}>}
  */
 async function saveAgain(name, size, failed) {
   stranded.add(failed);
@@ -176,7 +173,9 @@ async function saveAgain(name, size, failed) {
     }
     stranded.delete(failed);
     await failed.abort().catch(() => {});
-    return { saved: true, swap };
+    // The first try's swap file is no longer needed, but Chrome may not let it go until its writable does.
+    const leftover = await folder.removeEntry(swap).then(() => null, (error) => (error?.name === 'NotFoundError' ? null : swap));
+    return { saved: true, swap, leftover };
   } catch (error) {
     // The empty file made at the start would be in the way of renaming the swap file by hand. The browser may not
     // let it go while the failed writable lasts; then whoever renames the swap file has to delete it first.

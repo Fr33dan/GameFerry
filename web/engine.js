@@ -29,8 +29,9 @@
  * @property {number} [groupsChecked]
  * @property {number} [groupsFailing]
  * @property {string[]} [warnings]
- * @property {{name: string, problem: string}[]} [savedAgain]
+ * @property {{name: string, problem: string, leftover?: string | null}[]} [savedAgain]
  *   Files the browser wrote but couldn't give their real names, which were then saved again from its swap files.
+ *   `leftover` names a first swap file the browser wouldn't let go of yet.
  * @property {{name: string, swap: string | null, emptyLeft?: boolean, problem: string}[]} [unsaved]
  *   Files that couldn't be saved at all. While the page stays open, the browser's swap file (`swap`) still holds the
  *   whole file and can be renamed to `name` by hand, once the empty file of that name is deleted (`emptyLeft`).
