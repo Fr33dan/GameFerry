@@ -3,6 +3,7 @@ import { Engine } from './engine.js';
 import { gamesRoot, isGamesFolder, listGames, removeIfEmpty } from './card.js';
 import * as store from './store.js';
 import { Estimate, formatDuration, formatSize } from './estimate.js';
+import { coverImage, showCover } from './covers.js';
 
 const IMAGE = /\.(7z|iso|wbfs)$/i;
 
@@ -44,6 +45,7 @@ const state = {
   /** @type {import('./card.js').CardGame[]} */ cardGames: [],
   copying: false,
   cancelled: false,
+  /** Whether the lists show covers from GameTDB; remembered in this browser. */ showCovers: readSetting('covers') !== 'off',
 };
 
 // The folder APIs only exist on secure pages (https, or localhost); on plain http they are missing in any browser.
@@ -292,7 +294,9 @@ function makeRow(item) {
   cell(row, '', 'check').append(box);
   const sub = document.createElement('span');
   sub.className = 'sub';
-  cell(row, '').append(document.createElement('span'), sub);
+  const titles = document.createElement('div');
+  titles.append(document.createElement('span'), sub);
+  cell(row, '').append(gameBox(coverImage(), titles));
   cell(row, '');
   cell(row, '', 'number');
   cell(row, '');
@@ -312,8 +316,10 @@ function fillRow(item, row = rows.get(item)) {
   box.checked = item.selected;
   box.disabled = !canCopy(item);
   box.setAttribute('aria-label', `Copy ${title(item)}`);
-  /** @type {HTMLElement} */ (name.firstChild).textContent = title(item);
-  /** @type {HTMLElement} */ (name.lastChild).textContent = item.name;
+  const [heading, sub] = name.querySelectorAll('span');
+  heading.textContent = title(item);
+  sub.textContent = item.name;
+  if (state.showCovers) showCover(/** @type {HTMLImageElement} */ (name.querySelector('img')), item.probe?.problem ? null : item.probe?.id6);
   id.textContent = item.probe?.id6 ?? '';
   size.textContent = item.probe?.estimatedBytes ? `≈ ${formatSize(item.probe.estimatedBytes)}` : item.file ? formatSize(item.file.size) : '';
   status.textContent = item.status;
@@ -456,12 +462,34 @@ function renderCard() {
   else if (state.cardGames.length === 0) body.append(emptyRow(3, 'No games on this card yet.'));
   for (const game of state.cardGames) {
     const row = document.createElement('tr');
-    cell(row, game.title || game.folder);
+    const image = coverImage();
+    if (state.showCovers) showCover(image, game.id6);
+    const heading = document.createElement('span');
+    heading.textContent = game.title || game.folder;
+    cell(row, '').append(gameBox(image, heading));
     cell(row, game.id6);
     cell(row, formatSize(game.bytes), 'number');
     body.append(row);
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Covers
+
+function applyCovers() {
+  document.body.classList.toggle('no-covers', !state.showCovers);
+  $('toggle-covers').textContent = state.showCovers ? 'Hide covers' : 'Show covers';
+}
+
+$('toggle-covers').addEventListener('click', () => {
+  state.showCovers = !state.showCovers;
+  writeSetting('covers', state.showCovers ? 'on' : 'off');
+  applyCovers();
+  if (state.showCovers) {
+    refreshGames();
+    renderCard();
+  }
+});
 
 // ---------------------------------------------------------------------------------------------------------------
 // Keys (only for builds made without the Wii common key)
@@ -698,6 +726,36 @@ function cell(row, text, className) {
   return td;
 }
 
+/** A game's cover beside its title. @param {HTMLImageElement} image @param {HTMLElement} titles */
+function gameBox(image, titles) {
+  const box = document.createElement('div');
+  box.className = 'game';
+  box.append(image, titles);
+  return box;
+}
+
+/**
+ * A preference kept in this browser. Storage can be refused (private windows, blocked site data); the page then just
+ * uses its defaults.
+ * @param {string} name
+ */
+function readSetting(name) {
+  try {
+    return localStorage.getItem(`gameferry-${name}`);
+  } catch {
+    return null;
+  }
+}
+
+/** @param {string} name @param {string} value */
+function writeSetting(name, value) {
+  try {
+    localStorage.setItem(`gameferry-${name}`, value);
+  } catch {
+    // Not kept: the default comes back next visit.
+  }
+}
+
 /** @param {number} columns @param {string} text */
 function emptyRow(columns, text) {
   const row = document.createElement('tr');
@@ -745,6 +803,7 @@ async function restore(key, mode, buttonId, use, drive) {
   };
 }
 
+applyCovers();
 renderGames();
 renderCard();
 await restore('card', 'readwrite', 'reconnect-card', loadCard, 'card');

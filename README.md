@@ -68,7 +68,7 @@ Differences from the desktop app:
 - **Update partition:** always left out. It is never restored from NKit's recovery files.
 - **Splitting:** files are always split at 4 GiB − 32 KiB.
 - **Folder names:** the disc's own title is used.
-- **No cover art:** GameTDB doesn't allow other sites to fetch its images.
+- **Cover art:** shown in the lists, straight from GameTDB, but not copied to the card, because GameTDB doesn't let other sites save its images. USB Loader GX and WiiFlow can download covers themselves.
 - **No free-space check:** browsers can't see it.
 - **No read-back verify:** the copy is not read back from the card.
 
