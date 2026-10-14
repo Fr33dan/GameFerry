@@ -438,9 +438,10 @@ $('pick-card').addEventListener('click', async () => {
  */
 async function loadCard(handle, fresh = true) {
   state.card = handle;
-  $('card-hint').textContent = isGamesFolder(handle) ? `Games go straight into ${handle.name}.`
+  const where = isGamesFolder(handle) ? `Games go straight into ${handle.name}.`
     : isDrive(handle) ? "Games go in the card's wbfs folder."
     : `Games go in ${handle.name}/wbfs.`;
+  $('card-hint').textContent = where;
   try {
     const root = await gamesRoot(handle, false);
     state.cardGames = root ? await listGames(root) : [];
@@ -448,6 +449,10 @@ async function loadCard(handle, fresh = true) {
     state.cardGames = [];
     setStatus(`Couldn't read the card: ${/** @type {Error} */ (error).message}`);
   }
+
+  // Browsers can't say how much space a drive has left, but what is on it already helps judge what still fits.
+  const used = state.cardGames.reduce((sum, game) => sum + game.bytes, 0);
+  $('card-hint').textContent = state.cardGames.length ? `${where} It holds ${count(state.cardGames.length, 'game')}, ${formatSize(used)} in all.` : where;
 
   for (const item of state.items) classify(item, fresh);
   renderCard();
@@ -526,13 +531,15 @@ $('pick-keys').addEventListener('click', async () => {
 
 const CHOOSE_CARD = 'Choose the card to copy to.';
 
+/** The Copy button, with how many games are ticked and about how much room they will take on the card. */
 function updateStart() {
-  const count = state.items.filter((i) => i.selected).length;
+  const ticked = state.items.filter((i) => i.selected);
+  const bytes = ticked.reduce((sum, i) => sum + (i.probe?.estimatedBytes ?? i.file?.size ?? 0), 0);
   const start = /** @type {HTMLButtonElement} */ ($('start'));
-  start.disabled = state.copying || count === 0 || !state.card;
-  start.textContent = count > 0 ? `Copy ${count} game${count === 1 ? '' : 's'}` : 'Copy';
+  start.disabled = state.copying || ticked.length === 0 || !state.card;
+  start.textContent = ticked.length > 0 ? `Copy ${count(ticked.length, 'game')} (≈ ${formatSize(bytes)})` : 'Copy';
   if (state.copying) return;
-  if (count > 0 && !state.card) setStatus(CHOOSE_CARD);
+  if (ticked.length > 0 && !state.card) setStatus(CHOOSE_CARD);
   else if ($('status').textContent === CHOOSE_CARD) setStatus('');
 }
 

@@ -69,7 +69,7 @@ Differences from the desktop app:
 - **Splitting:** files are always split at 4 GiB − 32 KiB.
 - **Folder names:** the disc's own title is used.
 - **Cover art:** shown in the lists, straight from GameTDB, but not copied to the card, because GameTDB doesn't let other sites save its images. USB Loader GX and WiiFlow can download covers themselves.
-- **No free-space check:** browsers can't see it.
+- **No free-space check:** browsers can't see how much space is left. The Copy button shows roughly how much room the ticked games need, and the card panel how much its games take already.
 - **No read-back verify:** the copy is not read back from the card.
 
 Copies come out byte for byte the same as the desktop app's, apart from one region. On desktop, the dropped update partition's first 1.7 MB stay in the first 2 MB block, which no loader reads; the web version leaves zeros there.
