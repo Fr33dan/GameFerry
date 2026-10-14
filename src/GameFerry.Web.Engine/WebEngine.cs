@@ -1,4 +1,5 @@
 using System.IO.Hashing;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.JavaScript;
 using System.Security.Cryptography;
@@ -28,6 +29,8 @@ public static partial class WebEngine
     internal static string About() => Json(writer =>
     {
         writer.WriteString("version", typeof(WebEngine).Assembly.GetName().Version?.ToString(3));
+        // With the commit it was built from, e.g. 0.1.0+154eb7d…, so a log says exactly which code ran.
+        writer.WriteString("build", typeof(WebEngine).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion);
         writer.WriteBoolean("builtInKeys", WiiKeys.HasBuiltInKeys);
         writer.WriteBoolean("hasKeys", WiiKeys.Current.GetCommonKey(WiiKeys.StandardIndex) is not null);
     });

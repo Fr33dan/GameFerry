@@ -6,8 +6,9 @@
 //               { id, kind: 'keys', file }
 //               { id, kind: 'transfer', file, folder: FileSystemDirectoryHandle, baseName, options }
 //               { kind: 'cancel' }
-// Messages out: { id, result } or { id, error, name }; during a transfer { kind: 'progress', source, written }, and
-//               { kind: 'saving', name, done, total } while a part is saved again (see saveAgain).
+// Messages out: { id, result } or { id, error, name }; during a transfer { kind: 'progress', source, written },
+//               { kind: 'finishing', name, size } as each file is closed (see finish), and
+//               { kind: 'saving', name, done, total } while a file is saved again (see saveAgain).
 import { dotnet } from './_framework/dotnet.js';
 
 /** How much of each end of a file a probe reads ahead: a 7z's table of contents and an image's header fit easily. */
@@ -94,17 +95,32 @@ async function commitParts() {
   for (const [part, opening] of target.parts.entries()) {
     if (!opening) continue;
     const writable = await opening;
+    const name = target.names[part];
+    const started = performance.now();
     try {
-      await writable.close();
+      await finish(writable, name, target.sizes[part]);
     } catch (error) {
-      const name = target.names[part];
-      const problem = describe(error);
+      const problem = `${describe(error)} (after ${Math.round((performance.now() - started) / 1000)} s)`;
       const outcome = await saveAgain(name, target.sizes[part], writable);
       if (outcome.saved) savedAgain.push({ name, problem });
       else unsaved.push({ name, swap: outcome.swap, emptyLeft: outcome.emptyLeft, problem: outcome.problem ? `${problem}; saving again: ${outcome.problem}` : problem });
     }
   }
   return { savedAgain, unsaved };
+}
+
+/**
+ * Closes a written file, which is when Chrome reads the whole file back (a Safe Browsing check) and then renames its
+ * swap file. Before a big one it waits a little: that rename has failed on big files, maybe because something else,
+ * such as antivirus, was still reading the freshly written file, and a head start for that costs little next to the
+ * copy. The page is told, as the status would otherwise sit at 100% for minutes.
+ * @param {FileSystemWritableFileStream} writable @param {string} name @param {number} size
+ */
+async function finish(writable, name, size) {
+  postMessage({ kind: 'finishing', name, size });
+  const seconds = Math.min(30, Math.floor(size / 2 ** 30) * 5);
+  await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  await writable.close();
 }
 
 /** Writables whose closing failed. They are kept while the page is open, because Chrome deletes their swap files when they go. */
@@ -147,7 +163,17 @@ async function saveAgain(name, size, failed) {
       },
     });
     const writable = await (await folder.getFileHandle(name, { create: true })).createWritable({ keepExistingData: false });
-    await newest.file.stream().pipeThrough(counting).pipeTo(writable);
+    const started = performance.now();
+    try {
+      await newest.file.stream().pipeThrough(counting).pipeTo(writable, { preventClose: true });
+      await finish(writable, name, size);
+    } catch (error) {
+      await writable.abort().catch(() => {});
+      // A DOMException's message can't be changed, so the timing goes on a copy.
+      const timed = new Error(`${String(error?.message ?? error).replace(/\.$/, '')} (after ${Math.round((performance.now() - started) / 1000)} s)`);
+      timed.name = error?.name ?? 'Error';
+      throw timed;
+    }
     stranded.delete(failed);
     await failed.abort().catch(() => {});
     return { saved: true, swap };

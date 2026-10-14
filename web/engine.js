@@ -47,6 +47,8 @@ export class Engine {
     this.onProgress = null;
     /** @type {((name: string, done: number, total: number) => void) | null} While a file is saved again. */
     this.onSaving = null;
+    /** @type {((name: string, size: number) => void) | null} As each file is closed, which can take minutes. */
+    this.onFinishing = null;
 
     /** @type {Promise<void>} Settles once the .NET runtime has loaded in the worker. */
     this.ready = new Promise((resolve, reject) => {
@@ -67,6 +69,10 @@ export class Engine {
     }
     if (message.kind === 'saving') {
       this.onSaving?.(message.name, message.done, message.total);
+      return;
+    }
+    if (message.kind === 'finishing') {
+      this.onFinishing?.(message.name, message.size);
       return;
     }
     const waiting = this.pending.get(message.id);
@@ -92,7 +98,7 @@ export class Engine {
     });
   }
 
-  /** @returns {Promise<{version: string, builtInKeys: boolean, hasKeys: boolean}>} */
+  /** @returns {Promise<{version: string, build?: string, builtInKeys: boolean, hasKeys: boolean}>} */
   about() {
     return this.call('about');
   }
