@@ -628,6 +628,7 @@ async function copySelected() {
       for (const warning of result.warnings ?? []) log(`  note: ${warning}`);
       for (const again of result.savedAgain ?? []) {
         log(`  note: the browser couldn't finish saving ${again.name} (${again.problem}), so it was saved again from what had been written.`);
+        if (again.leftover) log(`  note: the first try, ${again.leftover}, stays beside it until this page is closed or reloaded; it can also be deleted.`);
       }
       if (result.groupsFailing) log(`  warning: ${result.groupsFailing} group(s) did not match the disc's hashes; the source may be damaged.`);
     } else if (result.unsaved?.length) {
