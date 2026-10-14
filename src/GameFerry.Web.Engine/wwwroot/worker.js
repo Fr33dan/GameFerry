@@ -6,7 +6,8 @@
 //               { id, kind: 'keys', file }
 //               { id, kind: 'transfer', file, folder: FileSystemDirectoryHandle, baseName, options }
 //               { kind: 'cancel' }
-// Messages out: { id, result } or { id, error, name }, and { kind: 'progress', source, written } during a transfer.
+// Messages out: { id, result } or { id, error, name }; during a transfer { kind: 'progress', source, written }, and
+//               { kind: 'saving', name, done, total } while a part is saved again (see saveAgain).
 import { dotnet } from './_framework/dotnet.js';
 
 /** How much of each end of a file a probe reads ahead: a 7z's table of contents and an image's header fit easily. */
@@ -61,6 +62,7 @@ const imports = {
     // Copied now: the engine reuses its buffer as soon as this returns.
     const data = view.slice();
     target.parts[part] ??= openPart(part);
+    target.sizes[part] = Math.max(target.sizes[part] ?? 0, offset + data.length);
     return target.parts[part].then((writable) => writable.write({ type: 'write', position: offset, data }));
   },
   progress(source, written) {
@@ -72,30 +74,112 @@ const runtime = await dotnet.create();
 runtime.setModuleImports('gameferry', imports);
 const engine = (await runtime.getAssemblyExports(runtime.getConfig().mainAssemblyName)).GameFerry.Web.Engine.WebEngine;
 
-/** Commits every part on success; otherwise discards them and removes the files the copy created. */
-async function finishParts(commit) {
-  const writables = await Promise.allSettled(target.parts.filter(Boolean));
-  for (const settled of writables) {
-    if (settled.status !== 'fulfilled') continue;
-    if (commit) await settled.value.close();
-    else await settled.value.abort().catch(() => {});
+/** Discards every part and removes the files the copy created. */
+async function discardParts() {
+  for (const settled of await Promise.allSettled(target.parts.filter(Boolean))) {
+    if (settled.status === 'fulfilled') await settled.value.abort().catch(() => {});
   }
+  for (const name of target.names.filter(Boolean)) await target.folder.removeEntry(name).catch(() => {});
+}
 
-  if (!commit) {
-    for (const name of target.names.filter(Boolean))
-      await target.folder.removeEntry(name).catch(() => {});
+/**
+ * Closes every part, which is when Chrome gives the file its real name: until then the data is in a swap file beside
+ * it (name.crswap). That last step can fail on its own, for instance if something else has the file open at that
+ * moment, so a part that fails is saved again from its swap file (see saveAgain).
+ * @returns {Promise<{savedAgain: object[], unsaved: object[]}>}
+ */
+async function commitParts() {
+  const savedAgain = [];
+  const unsaved = [];
+  for (const [part, opening] of target.parts.entries()) {
+    if (!opening) continue;
+    const writable = await opening;
+    try {
+      await writable.close();
+    } catch (error) {
+      const name = target.names[part];
+      const problem = describe(error);
+      const outcome = await saveAgain(name, target.sizes[part], writable);
+      if (outcome.saved) savedAgain.push({ name, problem });
+      else unsaved.push({ name, swap: outcome.swap, emptyLeft: outcome.emptyLeft, problem: outcome.problem ? `${problem}; saving again: ${outcome.problem}` : problem });
+    }
+  }
+  return { savedAgain, unsaved };
+}
+
+/** Writables whose closing failed. They are kept while the page is open, because Chrome deletes their swap files when they go. */
+const stranded = new Set();
+
+/**
+ * Saves a part again from the swap file Chrome wrote it to, after closing it failed: the swap file still holds every
+ * byte, so it is copied under the real name through a fresh writable (whose own swap file is name.1.crswap). The
+ * failed writable is kept until then, as Chrome deletes its swap file when it goes; if saving again fails too, it is
+ * kept for good, so the swap file can be renamed by hand.
+ * @param {string} name @param {number} size @param {FileSystemWritableFileStream} failed
+ * @returns {Promise<{saved: boolean, swap: string | null, emptyLeft?: boolean, problem?: string}>}
+ */
+async function saveAgain(name, size, failed) {
+  stranded.add(failed);
+  const folder = target.folder;
+  let swap = null;
+  try {
+    // The swap file holding this part: the right size, and the newest if an earlier copy left one too.
+    const swapName = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\.\\d+)?\\.crswap$`);
+    let newest = null;
+    for await (const [entry, handle] of folder.entries()) {
+      if (handle.kind !== 'file' || !swapName.test(entry)) continue;
+      const file = await /** @type {FileSystemFileHandle} */ (handle).getFile();
+      if (file.size === size && (!newest || file.lastModified >= newest.file.lastModified)) newest = { entry, file };
+    }
+    if (!newest) return { saved: false, swap: null, problem: 'the swap file could not be found' };
+    swap = newest.entry;
+
+    let done = 0;
+    let shown = 0;
+    const counting = new TransformStream({
+      transform(chunk, controller) {
+        done += chunk.length;
+        if (done - shown >= 16 << 20 || done === size) {
+          shown = done;
+          postMessage({ kind: 'saving', name, done, total: size });
+        }
+        controller.enqueue(chunk);
+      },
+    });
+    const writable = await (await folder.getFileHandle(name, { create: true })).createWritable({ keepExistingData: false });
+    await newest.file.stream().pipeThrough(counting).pipeTo(writable);
+    stranded.delete(failed);
+    await failed.abort().catch(() => {});
+    return { saved: true, swap };
+  } catch (error) {
+    // The empty file made at the start would be in the way of renaming the swap file by hand. The browser may not
+    // let it go while the failed writable lasts; then whoever renames the swap file has to delete it first.
+    const empty = async () => (await folder.getFileHandle(name).then((handle) => handle.getFile(), () => null))?.size === 0;
+    if (await empty()) await folder.removeEntry(name).catch(() => {});
+    return { saved: false, swap, emptyLeft: await empty(), problem: describe(error) };
   }
 }
 
+/** @param {any} error */
+function describe(error) {
+  return `${error?.name ?? 'Error'}: ${String(error?.message ?? error).replace(/\.$/, '')}`;
+}
+
 async function transfer(request) {
-  target = { folder: request.folder, baseName: request.baseName, parts: [], names: [] };
+  target = { folder: request.folder, baseName: request.baseName, parts: [], names: [], sizes: [] };
   const fileId = addFile(request.file);
   try {
     const result = JSON.parse(await engine.Transfer(fileId, request.file.size, request.file.name, JSON.stringify(request.options ?? {})));
-    await finishParts(result.ok === true && result.crcMatches !== false);
+    if (result.ok === true && result.crcMatches !== false) {
+      const { savedAgain, unsaved } = await commitParts();
+      if (savedAgain.length) result.savedAgain = savedAgain;
+      if (unsaved.length) result.unsaved = unsaved;
+    } else {
+      await discardParts();
+    }
     return result;
   } catch (error) {
-    await finishParts(false);
+    await discardParts();
     throw error;
   } finally {
     files.delete(fileId);
