@@ -568,6 +568,9 @@ async function copySelected() {
       estimate.report(index, source);
       showProgress(estimate, index, queue.length, name, source / Math.max(1, probe.imageBytes ?? file.size), written);
     };
+    engine.onSaving = (fileName, done, total) => {
+      setStatus(`${name}: the browser couldn't finish saving ${fileName}, so it is being saved again from what was written, ${Math.floor((done / Math.max(1, total)) * 100)}%`);
+    };
 
     /** @type {import('./engine.js').TransferResult} */
     let result;
@@ -579,7 +582,7 @@ async function copySelected() {
 
     estimate.finish(index);
     const seconds = (performance.now() - started) / 1000;
-    if (result.ok && result.crcMatches !== false) {
+    if (result.ok && result.crcMatches !== false && !result.unsaved?.length) {
       copied++;
       item.status = `Copied, ${formatSize(result.outputBytes ?? 0)}`;
       item.state = 'done';
@@ -589,7 +592,25 @@ async function copySelected() {
         : '';
       log(`  done in ${formatDuration(seconds)}: ${formatSize(result.outputBytes ?? 0)} in ${result.parts} file(s)${checked}`);
       for (const warning of result.warnings ?? []) log(`  note: ${warning}`);
+      for (const again of result.savedAgain ?? []) {
+        log(`  note: the browser couldn't finish saving ${again.name} (${again.problem}), so it was saved again from what had been written.`);
+      }
       if (result.groupsFailing) log(`  warning: ${result.groupsFailing} group(s) did not match the disc's hashes; the source may be damaged.`);
+    } else if (result.unsaved?.length) {
+      // Everything was written, but the browser couldn't give a file its name, even on a second try.
+      failed++;
+      item.state = 'failed';
+      const where = `${root.name}/${folderName}`;
+      /** @param {{name: string, swap: string | null, emptyLeft?: boolean}} u */
+      const fix = (u) => `${u.emptyLeft ? `delete the empty ${u.name}, then ` : ''}rename ${u.swap} to ${u.name}`;
+      const rescue = result.unsaved.filter((u) => u.swap);
+      item.status = rescue.length
+        ? `Not saved: in ${where}, ${rescue.map(fix).join(' and ')} before closing this page, or copy the game again`
+        : `Failed: the browser couldn't save ${result.unsaved.map((u) => u.name).join(' and ')}`;
+      for (const u of result.unsaved) {
+        log(`  The whole game was written, but the browser couldn't save ${u.name}: ${u.problem}.`);
+        if (u.swap) log(`  Its data is in ${where}/${u.swap}. To keep it, ${fix(u)} before closing this page; or copy the game again.`);
+      }
     } else {
       // A cancelled game stays ticked, ready for the next copy.
       if (!result.cancelled) failed++;
@@ -604,6 +625,7 @@ async function copySelected() {
   }
 
   engine.onProgress = null;
+  engine.onSaving = null;
   state.copying = false;
   $('cancel').hidden = true;
   /** @type {HTMLElement} */ ($('progress-bar')).style.width = `${failed || state.cancelled ? estimate.fraction * 100 : 100}%`;

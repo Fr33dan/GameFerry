@@ -29,6 +29,11 @@
  * @property {number} [groupsChecked]
  * @property {number} [groupsFailing]
  * @property {string[]} [warnings]
+ * @property {{name: string, problem: string}[]} [savedAgain]
+ *   Files the browser wrote but couldn't give their real names, which were then saved again from its swap files.
+ * @property {{name: string, swap: string | null, emptyLeft?: boolean, problem: string}[]} [unsaved]
+ *   Files that couldn't be saved at all. While the page stays open, the browser's swap file (`swap`) still holds the
+ *   whole file and can be renamed to `name` by hand, once the empty file of that name is deleted (`emptyLeft`).
  */
 
 export class Engine {
@@ -40,6 +45,8 @@ export class Engine {
     this.pending = new Map();
     /** @type {((source: number, written: number) => void) | null} */
     this.onProgress = null;
+    /** @type {((name: string, done: number, total: number) => void) | null} While a file is saved again. */
+    this.onSaving = null;
 
     /** @type {Promise<void>} Settles once the .NET runtime has loaded in the worker. */
     this.ready = new Promise((resolve, reject) => {
@@ -56,6 +63,10 @@ export class Engine {
     }
     if (message.kind === 'progress') {
       this.onProgress?.(message.source, message.written);
+      return;
+    }
+    if (message.kind === 'saving') {
+      this.onSaving?.(message.name, message.done, message.total);
       return;
     }
     const waiting = this.pending.get(message.id);
