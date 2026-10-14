@@ -104,7 +104,7 @@ input[type="search"] {
 
 /* The two lists fill their panels, which share a row as tall as the window allows with the copy controls still in
    view, so a long list scrolls within the whole panel and both panels end level. */
-.list-panel { display: flex; flex-direction: column; min-height: clamp(420px, calc(100vh - 360px), 1000px); }
+.list-panel { display: flex; flex-direction: column; min-height: clamp(420px, calc(100vh - 380px), 1000px); }
 .table-wrap { flex: 1 1 0; min-height: 160px; overflow: auto; }
 @media (max-width: 860px) {
   .list-panel { min-height: 0; }
@@ -117,6 +117,14 @@ tbody tr:hover { background: var(--row-hover); }
 td.number, th.number { text-align: right; white-space: nowrap; }
 td.check, th.check { width: 28px; }
 td .sub { display: block; color: var(--muted); font-size: 0.86rem; overflow-wrap: anywhere; }
+
+/* A game's front cover beside its title, the height of a two-line row; an empty frame until (or unless) GameTDB has one. */
+.game { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.game > :last-child { min-width: 0; }
+.cover { flex: none; width: 30px; height: 42px; border-radius: 2px; background: var(--line); object-fit: cover; }
+.no-covers .cover { display: none; }
+
+button.link { background: none; border: none; padding: 0; color: var(--accent); text-decoration: underline; font: inherit; cursor: pointer; }
 .empty td { color: var(--muted); text-align: center; padding: 18px 8px; }
 
 .state-waiting { color: var(--muted); }
