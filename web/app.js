@@ -612,6 +612,9 @@ async function copySelected() {
     engine.onFinishing = (fileName) => {
       setStatus(`${name}: finishing ${fileName}. The browser reads the whole file back before saving it, which takes a few minutes for a big game.`);
     };
+    engine.onRenaming = (fileName, attempt, of, pause) => {
+      setStatus(`${name}: the browser couldn't finish saving ${fileName}, so GameFerry will rename it itself in ${pause} s (try ${attempt} of ${of}).`);
+    };
 
     /** @type {import('./engine.js').TransferResult} */
     let result;
@@ -634,7 +637,9 @@ async function copySelected() {
       log(`  done in ${formatDuration(seconds)}: ${formatSize(result.outputBytes ?? 0)} in ${result.parts} file(s)${checked}`);
       for (const warning of result.warnings ?? []) log(`  note: ${warning}`);
       for (const again of result.savedAgain ?? []) {
-        log(`  note: the browser couldn't finish saving ${again.name} (${again.problem}), so it was saved again from what had been written.`);
+        log(again.renamed
+          ? `  note: the browser couldn't finish saving ${again.name} (${again.problem}), so GameFerry renamed it itself afterwards (try ${again.renamed}).`
+          : `  note: the browser couldn't finish saving ${again.name} (${again.problem}), so it was saved again from what had been written.`);
         if (again.leftover) log(`  note: the first try, ${again.leftover}, stays beside it until this page is closed or reloaded; it can also be deleted.`);
       }
       if (result.groupsFailing) log(`  warning: ${result.groupsFailing} group(s) did not match the disc's hashes; the source may be damaged.`);
@@ -669,6 +674,7 @@ async function copySelected() {
   engine.onProgress = null;
   engine.onSaving = null;
   engine.onFinishing = null;
+  engine.onRenaming = null;
   state.copying = false;
   $('cancel').hidden = true;
   /** @type {HTMLElement} */ ($('progress-bar')).style.width = `${failed || state.cancelled ? estimate.fraction * 100 : 100}%`;

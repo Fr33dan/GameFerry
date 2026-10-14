@@ -7,8 +7,9 @@
 //               { id, kind: 'transfer', file, folder: FileSystemDirectoryHandle, baseName, options }
 //               { kind: 'cancel' }
 // Messages out: { id, result } or { id, error, name }; during a transfer { kind: 'progress', source, written },
-//               { kind: 'finishing', name, size } as each file is closed (see finish), and
-//               { kind: 'saving', name, done, total } while a file is saved again (see saveAgain).
+//               { kind: 'finishing', name, size } as each file is closed (see finish), and after closing failed,
+//               { kind: 'renaming', name, attempt, of, pause } before each try at renaming its swap file, or
+//               { kind: 'saving', name, done, total } while it is copied again (see saveAgain).
 import { dotnet } from './_framework/dotnet.js';
 
 /** How much of each end of a file a probe reads ahead: a 7z's table of contents and an image's header fit easily. */
@@ -102,8 +103,8 @@ async function commitParts() {
     } catch (error) {
       const problem = `${describe(error)} (after ${Math.round((performance.now() - started) / 1000)} s)`;
       const outcome = await saveAgain(name, target.sizes[part], writable);
-      if (outcome.saved) savedAgain.push({ name, problem, leftover: outcome.leftover });
-      else unsaved.push({ name, swap: outcome.swap, emptyLeft: outcome.emptyLeft, problem: outcome.problem ? `${problem}; saving again: ${outcome.problem}` : problem });
+      if (outcome.saved) savedAgain.push({ name, problem, leftover: outcome.leftover, renamed: outcome.renamed });
+      else unsaved.push({ name, swap: outcome.swap, emptyLeft: outcome.emptyLeft, problem: outcome.problem ? `${problem}; then ${outcome.problem}` : problem });
     }
   }
   return { savedAgain, unsaved };
@@ -123,54 +124,42 @@ async function finish(writable, name, size) {
 /** Writables whose closing failed. They are kept while the page is open, because Chrome deletes their swap files when they go. */
 const stranded = new Set();
 
+/** How long to wait before each try at renaming a swap file, in seconds. */
+const RENAME_PAUSES = [5, 20, 60];
+
 /**
- * Saves a part again from the swap file Chrome wrote it to, after closing it failed: the swap file still holds every
- * byte, so it is copied under the real name through a fresh writable (whose own swap file is name.1.crswap). The
- * failed writable is kept until then, as Chrome deletes its swap file when it goes; if saving again fails too, it is
- * kept for good, so the swap file can be renamed by hand.
+ * Saves a part after closing it failed. Closing is when Chrome reads the file back and renames its swap file
+ * (name.crswap) onto the real name. When that rename fails, Chrome drops the writable and tries to delete the swap
+ * file, which survives only because something else, most likely antivirus, still has it open; renaming it by hand
+ * later works.
+ *
+ * So the swap file is renamed here, after a pause for whatever has it to let go, and again after longer pauses if
+ * need be. Each try costs Chrome one more read of the file, but nothing is written again. Only where renaming is not
+ * possible at all (the failed writable still holds the file, or the browser can't move files) is the swap file copied
+ * to the real name through a fresh writable instead. If nothing works, the failed writable is kept, so the swap file
+ * stays and can be renamed by hand.
  * @param {string} name @param {number} size @param {FileSystemWritableFileStream} failed
- * @returns {Promise<{saved: boolean, swap: string | null, leftover?: string | null, emptyLeft?: boolean, problem?: string}>}
+ * @returns {Promise<{saved: boolean, swap: string | null, renamed?: number, leftover?: string | null, emptyLeft?: boolean, problem?: string}>}
  */
 async function saveAgain(name, size, failed) {
   stranded.add(failed);
   const folder = target.folder;
   let swap = null;
   try {
-    // The swap file holding this part: the right size, and the newest if an earlier copy left one too.
-    const swapName = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\.\\d+)?\\.crswap$`);
-    let newest = null;
-    for await (const [entry, handle] of folder.entries()) {
-      if (handle.kind !== 'file' || !swapName.test(entry)) continue;
-      const file = await /** @type {FileSystemFileHandle} */ (handle).getFile();
-      if (file.size === size && (!newest || file.lastModified >= newest.file.lastModified)) newest = { entry, file };
-    }
-    if (!newest) return { saved: false, swap: null, problem: 'the swap file could not be found' };
-    swap = newest.entry;
+    const found = await findSwap(folder, name, size);
+    if (!found) return { saved: false, swap: null, problem: 'its swap file could not be found' };
+    swap = found.entry;
 
-    let done = 0;
-    let shown = 0;
-    const counting = new TransformStream({
-      transform(chunk, controller) {
-        done += chunk.length;
-        if (done - shown >= 16 << 20 || done === size) {
-          shown = done;
-          postMessage({ kind: 'saving', name, done, total: size });
-        }
-        controller.enqueue(chunk);
-      },
-    });
-    const writable = await (await folder.getFileHandle(name, { create: true })).createWritable({ keepExistingData: false });
-    const started = performance.now();
-    try {
-      await newest.file.stream().pipeThrough(counting).pipeTo(writable, { preventClose: true });
-      await finish(writable, name, size);
-    } catch (error) {
-      await writable.abort().catch(() => {});
-      // A DOMException's message can't be changed, so the timing goes on a copy.
-      const timed = new Error(`${String(error?.message ?? error).replace(/\.$/, '')} (after ${Math.round((performance.now() - started) / 1000)} s)`);
-      timed.name = error?.name ?? 'Error';
-      throw timed;
+    const renaming = await renameSwap(folder, found.handle, name);
+    if (renaming.tries) {
+      stranded.delete(failed);
+      return { saved: true, swap, renamed: renaming.tries };
     }
+    if (renaming.error) {
+      throw Object.assign(new Error(`renaming its swap file failed ${RENAME_PAUSES.length} times, the last time with ${describe(renaming.error)}`), { name: 'RenameError' });
+    }
+
+    await copyAgain(folder, found.file, name, size);
     stranded.delete(failed);
     await failed.abort().catch(() => {});
     // The first try's swap file is no longer needed, but Chrome may not let it go until its writable does.
@@ -181,8 +170,82 @@ async function saveAgain(name, size, failed) {
     // let it go while the failed writable lasts; then whoever renames the swap file has to delete it first.
     const empty = async () => (await folder.getFileHandle(name).then((handle) => handle.getFile(), () => null))?.size === 0;
     if (await empty()) await folder.removeEntry(name).catch(() => {});
-    return { saved: false, swap, emptyLeft: await empty(), problem: describe(error) };
+    return { saved: false, swap, emptyLeft: await empty(), problem: error?.name === 'RenameError' ? error.message : `saving again: ${describe(error)}` };
   }
+}
+
+/** The swap file holding a part: the right size, and the newest if an earlier copy left one too. */
+async function findSwap(folder, name, size) {
+  const pattern = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\.\\d+)?\\.crswap$`);
+  let newest = null;
+  for await (const [entry, handle] of folder.entries()) {
+    if (handle.kind !== 'file' || !pattern.test(entry)) continue;
+    const file = await /** @type {FileSystemFileHandle} */ (handle).getFile();
+    if (file.size === size && (!newest || file.lastModified >= newest.file.lastModified)) newest = { entry, handle, file };
+  }
+  return newest;
+}
+
+/**
+ * Renames a swap file onto its real name, waiting before each try. Returns the number of tries it took; or, if every
+ * try failed the way closing had, that error; or neither, if renaming can't work here at all.
+ * @param {FileSystemDirectoryHandle} folder @param {FileSystemFileHandle} handle @param {string} name
+ * @returns {Promise<{tries?: number, error?: Error}>}
+ */
+async function renameSwap(folder, handle, name) {
+  // @ts-ignore: move() is Chromium's.
+  if (typeof handle.move !== 'function') return {};
+  let failure;
+  for (const [i, pause] of RENAME_PAUSES.entries()) {
+    postMessage({ kind: 'renaming', name, attempt: i + 1, of: RENAME_PAUSES.length, pause });
+    await new Promise((resolve) => setTimeout(resolve, pause * 1000));
+    const started = performance.now();
+    try {
+      // The empty file the copy started with is in the way.
+      const existing = await folder.getFileHandle(name).then((h) => h.getFile(), () => null);
+      if (existing?.size === 0) await folder.removeEntry(name);
+      // @ts-ignore: move() is Chromium's.
+      await handle.move(name);
+      return { tries: i + 1 };
+    } catch (error) {
+      // Only the failure closing had is worth waiting out; anything else means renaming can't work here.
+      if (error?.name !== 'InvalidStateError') return {};
+      failure = timed(error, started);
+    }
+  }
+  return { error: failure };
+}
+
+/** Copies a swap file to the real name through a fresh writable, showing how far it has got. */
+async function copyAgain(folder, file, name, size) {
+  let done = 0;
+  let shown = 0;
+  const counting = new TransformStream({
+    transform(chunk, controller) {
+      done += chunk.length;
+      if (done - shown >= 16 << 20 || done === size) {
+        shown = done;
+        postMessage({ kind: 'saving', name, done, total: size });
+      }
+      controller.enqueue(chunk);
+    },
+  });
+  const writable = await (await folder.getFileHandle(name, { create: true })).createWritable({ keepExistingData: false });
+  const started = performance.now();
+  try {
+    await file.stream().pipeThrough(counting).pipeTo(writable, { preventClose: true });
+    await finish(writable, name, size);
+  } catch (error) {
+    await writable.abort().catch(() => {});
+    throw timed(error, started);
+  }
+}
+
+/** The error with how long the step took added, for the log. A DOMException's message can't be changed, so on a copy. */
+function timed(error, started) {
+  const copy = new Error(`${String(error?.message ?? error).replace(/\.$/, '')} (after ${Math.round((performance.now() - started) / 1000)} s)`);
+  copy.name = error?.name ?? 'Error';
+  return copy;
 }
 
 /** @param {any} error */
