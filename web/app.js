@@ -710,14 +710,13 @@ async function copySelected() {
       estimate.report(index, source);
       showProgress(estimate, index, queue.length, name, source / Math.max(1, probe.imageBytes ?? file.size), written);
     };
-    engine.onSaving = (fileName, done, total) => {
-      setStatus(`${name}: the browser couldn't finish saving ${fileName}, so it is being saved again from what was written, ${Math.floor((done / Math.max(1, total)) * 100)}%`);
-    };
     engine.onFinishing = (fileName) => {
       setStatus(`${name}: finishing ${fileName}. The browser reads the whole file back before saving it, which takes a few minutes for a big game.`);
     };
     engine.onRenaming = (fileName, attempt, of, pause) => {
-      setStatus(`${name}: the browser couldn't finish saving ${fileName}, so GameFerry will rename it itself in ${pause} s (try ${attempt} of ${of}).`);
+      setStatus(pause
+        ? `${name}: the browser couldn't finish saving ${fileName}, so GameFerry will rename it itself in ${pause} s (try ${attempt} of ${of}).`
+        : `${name}: renaming ${fileName} (try ${attempt} of ${of}). The browser reads the whole file back again first, which takes a few minutes for a big game.`);
     };
 
     /** @type {import('./engine.js').TransferResult} */
@@ -741,14 +740,11 @@ async function copySelected() {
       log(`  done in ${formatDuration(seconds)}: ${formatSize(result.outputBytes ?? 0)} in ${result.parts} file(s)${checked}`);
       for (const warning of result.warnings ?? []) log(`  note: ${warning}`);
       for (const again of result.savedAgain ?? []) {
-        log(again.renamed
-          ? `  note: the browser couldn't finish saving ${again.name} (${again.problem}), so GameFerry renamed it itself afterwards (try ${again.renamed}).`
-          : `  note: the browser couldn't finish saving ${again.name} (${again.problem}), so it was saved again from what had been written.`);
-        if (again.leftover) log(`  note: the first try, ${again.leftover}, stays beside it until this page is closed or reloaded; it can also be deleted.`);
+        log(`  note: the browser couldn't finish saving ${again.name} (${again.problem}), so GameFerry renamed it itself afterwards: ${renameTries(again.tries)}.`);
       }
       if (result.groupsFailing) log(`  warning: ${result.groupsFailing} group(s) did not match the disc's hashes; the source may be damaged.`);
     } else if (result.unsaved?.length) {
-      // Everything was written, but the browser couldn't give a file its name, even on a second try.
+      // Everything was written, but the browser couldn't give a file its name, and neither could GameFerry afterwards.
       failed++;
       item.state = 'failed';
       const where = `${root.name}/${folderName}`;
@@ -756,12 +752,18 @@ async function copySelected() {
       const fix = (u) => `${u.emptyLeft ? `delete the empty ${u.name}, then ` : ''}rename ${u.swap} to ${u.name}`;
       const rescue = result.unsaved.filter((u) => u.swap);
       item.status = rescue.length
-        ? `Not saved: in ${where}, ${rescue.map(fix).join(' and ')} before closing this page, or copy the game again`
+        ? `Not saved: in ${where}, ${rescue.map(fix).join(' and ')}, or copy the game again`
         : `Failed: the browser couldn't save ${result.unsaved.map((u) => u.name).join(' and ')}`;
       for (const u of result.unsaved) {
         log(`  The whole game was written, but the browser couldn't save ${u.name}: ${u.problem}.`);
-        if (u.swap) log(`  Its data is in ${where}/${u.swap}. To keep it, ${fix(u)} before closing this page; or copy the game again.`);
+        if (u.swap) {
+          log(`  GameFerry couldn't rename it afterwards either: ${renameTries(u.tries)}.`);
+          log(`  Its data is in ${where}/${u.swap}, whole. To keep it, ${fix(u)}; or copy the game again.`);
+        } else {
+          log('  Its swap file could not be found, so the game has to be copied again.');
+        }
       }
+      if (!rescue.length && !existed) await removeIfEmpty(root, folderName);
     } else {
       // A cancelled game stays ticked, ready for the next copy.
       if (!result.cancelled) failed++;
@@ -776,7 +778,6 @@ async function copySelected() {
   }
 
   engine.onProgress = null;
-  engine.onSaving = null;
   engine.onFinishing = null;
   engine.onRenaming = null;
   state.copying = false;
@@ -919,6 +920,16 @@ function log(line) {
   const box = $('log');
   box.textContent += `${line}\n`;
   box.scrollTop = box.scrollHeight;
+}
+
+/**
+ * Each try at renaming a file the browser couldn't save, for the log: how long GameFerry waited, how it went, and how
+ * long the browser took over it.
+ * @param {import('./engine.js').RenameTry[]} tries
+ */
+function renameTries(tries) {
+  const outcome = (/** @type {import('./engine.js').RenameTry} */ t) => (!t.problem ? 'worked' : t.same ? 'failed the same way' : `failed with ${t.problem}`);
+  return tries.map((t, i) => `try ${i + 1} after ${t.pause} s ${outcome(t)} (${t.seconds} s)`).join('; ');
 }
 
 /**
