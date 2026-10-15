@@ -41,9 +41,50 @@
       <div class="progress slim" id="read-progress" role="progressbar" aria-label="Reading the games" aria-valuemin="0" aria-valuemax="100" hidden><div id="read-bar"></div></div>
       <div class="list-tools" id="list-tools" hidden>
         <input type="search" id="filter" placeholder="Search by name or ID" aria-label="Search the games" autocomplete="off" spellcheck="false">
+        <label class="option">List
+          <select id="list-pick">
+            <option value="">All games</option>
+            <optgroup label="GameFerry lists" id="lists-builtin"><option disabled>Loading…</option></optgroup>
+            <optgroup label="Your lists" id="lists-mine"></optgroup>
+            <optgroup label="Make or open a list">
+              <option value="new">New list from the ticked games…</option>
+              <option value="open">Open a list file…</option>
+            </optgroup>
+          </select>
+        </label>
         <label class="option"><input type="checkbox" id="only-ticked"> Only ticked</label>
         <span class="hint" id="filter-count"></span>
       </div>
+      <div class="list-bar" id="list-bar" hidden>
+        <p><strong id="list-name"></strong> <span class="muted" id="list-description"></span></p>
+        <p>
+          <span id="list-count"></span>
+          <button type="button" class="secondary small" id="list-tick">Tick them</button>
+          <button type="button" class="link" id="list-show-missing" aria-expanded="false" aria-controls="list-missing"></button>
+        </p>
+        <div id="list-missing" hidden>
+          <p class="muted">Not in your folder. If you own one of these discs, CleanRip can back it up on your Wii.</p>
+          <ul id="list-missing-titles"></ul>
+        </div>
+        <p class="muted note" id="list-from-gameferry" hidden>One of the <a id="list-about" href="#" target="_blank" rel="noopener">GameFerry lists</a>: titles and game IDs only, to sort your own games by.</p>
+        <p>
+          <button type="button" class="link" id="list-copy" hidden>Make your own copy to change</button>
+          <button type="button" class="link" id="list-add" hidden>Add the ticked games</button>
+          <button type="button" class="link" id="list-remove" hidden>Take the ticked games out</button>
+          <button type="button" class="link" id="list-save">Save as a file</button>
+          <button type="button" class="link" id="list-delete" hidden>Delete this list</button>
+        </p>
+      </div>
+      <form class="list-bar" id="list-new" hidden>
+        <p><label>Name for the new list <input type="text" id="list-new-name" maxlength="80" required autocomplete="off"></label></p>
+        <p>
+          <span class="muted" id="list-new-count"></span>
+          <button type="submit">Save the list</button>
+          <button type="button" class="secondary" id="list-new-cancel">Cancel</button>
+        </p>
+      </form>
+      <p class="hint problem" id="list-problem" hidden></p>
+      <input type="file" id="list-file" accept=".json,application/json" hidden>
       <div class="table-wrap">
         <table id="games">
           <thead>

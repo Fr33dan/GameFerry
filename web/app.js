@@ -4,6 +4,7 @@ import { gamesRoot, isGamesFolder, listGames, removeIfEmpty } from './card.js';
 import * as store from './store.js';
 import { Estimate, formatDuration, formatSize } from './estimate.js';
 import { coverImage, showCover } from './covers.js';
+import { LISTS_ABOUT, LISTS_URL, fetchLists, listFile, listFileName, matcher, parseList } from './lists.js';
 
 const IMAGE = /\.(7z|iso|wbfs)$/i;
 
@@ -29,6 +30,7 @@ const $ = (id) => document.getElementById(id);
  * @property {boolean} selected
  * @property {string} status
  * @property {string} state   waiting | reading | ready | busy | done | failed | skip
+ * @property {number} order   Where it came in the folder (by file name) or among added files; the order until another is chosen.
  */
 
 const state = {
@@ -48,6 +50,9 @@ const state = {
   /** Whether the lists show covers from GameTDB; remembered in this browser. */ showCovers: readSetting('covers') !== 'off',
   /** Whether the list hides games that aren't ticked. */ onlyTicked: false,
   /** @type {{key: string | null, descending: boolean}} How the list is sorted; remembered in this browser. */ sort: readSort(),
+  /** @type {import('./lists.js').GameList | null} The list whose games alone are shown, if one is chosen. */ list: null,
+  /** @type {'builtin' | 'own' | null} Whether that is one of the GameFerry lists or one made here. */ listKind: null,
+  /** @type {((id6: string) => number) | null} Where a disc comes in the chosen list, or -1. */ listMatch: null,
 };
 
 // The folder APIs only exist on secure pages (https, or localhost); on plain http they are missing in any browser.
@@ -128,6 +133,8 @@ async function loadSource(folder) {
   await addGames(found, found.length <= TICK_UP_TO && !found.some((handle) => picks.has(handle.name)));
 }
 
+let nextOrder = 0;
+
 /**
  * Adds games to the list, showing straight away those remembered from an earlier visit, and starts reading the rest.
  * @param {FileSystemFileHandle[]} handles
@@ -141,7 +148,7 @@ async function addGames(handles, tick) {
   for (const handle of handles) {
     if (names.has(handle.name)) continue;
     names.add(handle.name);
-    added.push({ name: handle.name, handle, file: null, probe: null, known: null, reading: null, tick: tick || picks.has(handle.name), selected: false, status: 'Not read yet', state: 'waiting' });
+    added.push({ name: handle.name, handle, file: null, probe: null, known: null, reading: null, tick: tick || picks.has(handle.name), selected: false, status: 'Not read yet', state: 'waiting', order: nextOrder++ });
   }
 
   const remembered = await store.loadMany(added.map((i) => `game:${i.name}`));
@@ -191,10 +198,20 @@ function rememberPicks() {
 const STATE_ORDER = ['ready', 'failed', 'busy', 'reading', 'waiting', 'done', 'skip'];
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
-/** Puts the list in the order last chosen by clicking a column heading; until one is, it stays in file-name order. */
+/**
+ * Puts the games in the order last chosen by clicking a column heading. Until one is, they stay in file-name order,
+ * or with a list chosen, in the list's own order (best-selling first, say).
+ */
 function sortItems() {
   const { key, descending } = state.sort;
-  if (!key) return;
+  if (!key) {
+    const place = (/** @type {Item} */ item) => {
+      const i = item.probe?.id6 && state.listMatch ? state.listMatch(item.probe.id6) : -1;
+      return i < 0 ? Infinity : i;
+    };
+    state.items.sort((a, b) => (state.listMatch ? place(a) - place(b) : 0) || a.order - b.order);
+    return;
+  }
   /** @param {Item} item @returns {string | number} */
   const value = (item) => key === 'id' ? item.probe?.id6 ?? ''
     : key === 'size' ? item.probe?.estimatedBytes ?? item.file?.size ?? 0
@@ -284,6 +301,8 @@ async function read(item) {
   }
   classify(item);
   fillRow(item);
+  // A game of the chosen list, just identified, takes its place in the list's order.
+  if (state.listMatch && !state.sort.key && inList(item)) resortPending = true;
   scheduleSummary();
 }
 
@@ -327,10 +346,17 @@ function title(item) {
  */
 function matches(item) {
   if (state.onlyTicked && !ticked(item)) return false;
+  if (state.listMatch && !inList(item)) return false;
   if (state.filter.length === 0) return true;
   const text = `${item.name} ${item.probe?.discTitle ?? ''}`.toLowerCase();
   const id = item.probe?.id6?.toLowerCase() ?? '';
   return state.filter.every((word) => text.includes(word) || id.startsWith(word));
+}
+
+/** True if the game is one of the chosen list's. @param {Item} item */
+function inList(item) {
+  const id6 = item.probe?.id6;
+  return !!id6 && !!state.listMatch && state.listMatch(id6) >= 0;
 }
 
 /** Ticked, or going to be once it has been read (a remembered tick, say). @param {Item} item */
@@ -408,14 +434,21 @@ function fillRow(item, row = rows.get(item)) {
 }
 
 let summaryPending = false;
+let resortPending = false;
 
-/** Updates the counts once per frame at most, however many files are read in between. */
+/** Updates the counts once per frame at most, however many files are read in between (and the order, if need be). */
 function scheduleSummary() {
   if (summaryPending) return;
   summaryPending = true;
   requestAnimationFrame(() => {
     summaryPending = false;
-    summarize();
+    if (resortPending) {
+      resortPending = false;
+      sortItems();
+      renderGames();
+    } else {
+      summarize();
+    }
   });
 }
 
@@ -435,12 +468,14 @@ function summarize() {
 
   const shown = state.items.filter(matches);
   $('list-tools').hidden = total === 0;
-  $('filter-count').textContent = state.filter.length || state.onlyTicked ? `${shown.length.toLocaleString()} of ${total.toLocaleString()} shown` : '';
+  $('filter-count').textContent = state.filter.length || state.onlyTicked || state.list ? `${shown.length.toLocaleString()} of ${total.toLocaleString()} shown` : '';
   noMatch.hidden = total === 0 || shown.length > 0;
   const words = $('filter').value.trim();
-  noMatch.cells[0].textContent = !state.onlyTicked ? `No games match “${words}”.`
-    : words ? `No ticked games match “${words}”.`
-    : 'No games are ticked.';
+  const of = state.list ? ` from ${state.list.name}` : '';
+  noMatch.cells[0].textContent = state.onlyTicked ? (words ? `No ticked games${of} match “${words}”.` : `No games${of} are ticked.`)
+    : words ? `No games${of} match “${words}”.`
+    : `None of the games in ${state.list?.name ?? 'the list'} are in your folder.`;
+  showList();
   rememberPicks();
 
   const choosable = shown.filter(canCopy);
@@ -523,6 +558,298 @@ for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.quer
     sortItems();
     renderGames();
   });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Lists: themed lists published with GameFerry, and lists made here. Choosing one shows only its games that are in
+// the folder; it never says where to find the others.
+
+/** @type {import('./lists.js').GameList[]} The GameFerry lists, as last fetched. */
+let builtInLists = [];
+/** @type {string | null} Why the GameFerry lists couldn't be fetched just now. */
+let builtInProblem = null;
+let builtInLoading = true;
+/** @type {import('./lists.js').GameList[]} Lists made on this page or opened from files, kept in this browser. */
+let ownLists = [];
+/** Whether the titles of the chosen list's games that aren't in the folder are unfolded. */
+let missingShown = false;
+let missingShowing = '';
+
+/** @param {import('./lists.js').GameList} list @param {'builtin' | 'own'} kind */
+const listKey = (list, kind) => `${kind}:${list.id}`;
+
+/** Fills the list picker, with the chosen list selected. */
+function showListChoices() {
+  /** @param {string} id @param {import('./lists.js').GameList[]} lists @param {'builtin' | 'own'} kind @param {string} empty */
+  const fill = (id, lists, kind, empty) => {
+    const group = $(id);
+    group.replaceChildren(...lists.map((list) => new Option(`${list.name} (${list.games.length.toLocaleString()})`, listKey(list, kind))));
+    if (lists.length === 0) {
+      const none = new Option(empty, '');
+      none.disabled = true;
+      group.append(none);
+    }
+  };
+  fill('lists-builtin', builtInLists, 'builtin', builtInLoading ? 'Loading…' : builtInProblem ? "Couldn't be loaded just now" : 'None');
+  fill('lists-mine', ownLists, 'own', 'None yet');
+  /** @type {HTMLSelectElement} */ ($('list-pick')).value = state.list && state.listKind ? listKey(state.list, state.listKind) : '';
+}
+
+/**
+ * Shows only the games of a list, or every game again.
+ * @param {string} key "builtin:" or "own:" and the list's ID, or "" for every game.
+ */
+function chooseList(key) {
+  const [kind, id] = key.split(/:(.*)/s);
+  const list = (kind === 'builtin' ? builtInLists : kind === 'own' ? ownLists : []).find((l) => l.id === id) ?? null;
+  state.list = list;
+  state.listKind = list ? /** @type {'builtin' | 'own'} */ (kind) : null;
+  state.listMatch = list ? matcher(list) : null;
+  writeSetting('list', list ? key : '');
+  missingShown = false;
+  $('list-new').hidden = true;
+  showListProblem(null);
+  showListChoices();
+  sortItems();
+  renderGames();
+}
+
+/** After a list made here has changed: shows it again, then keeps it. */
+function listChanged() {
+  if (state.list) state.listMatch = matcher(state.list);
+  showListChoices();
+  sortItems();
+  renderGames();
+  return keepOwnLists();
+}
+
+/** Keeps the lists made here in this browser. The page shows a change first; keeping it can take a moment. */
+function keepOwnLists() {
+  return store.save('lists-own', ownLists);
+}
+
+/** The bar under the search box: the chosen list, how many of its games are in the folder, and (folded) those that aren't. */
+function showList() {
+  const list = state.list;
+  const match = state.listMatch;
+  $('list-bar').hidden = !list;
+  if (!list || !match) return;
+  $('list-name').textContent = list.name;
+  $('list-description').textContent = list.description;
+
+  /** @type {Set<number>} */
+  const found = new Set();
+  let copyable = 0;
+  let toTick = 0;
+  for (const item of state.items) {
+    const place = item.probe?.id6 ? match(item.probe.id6) : -1;
+    if (place < 0) continue;
+    found.add(place);
+    if (!canCopy(item)) continue;
+    copyable++;
+    if (!item.selected) toTick++;
+  }
+  const total = list.games.length;
+  const n = found.size;
+  const reading = state.looking !== null || state.items.some((i) => !i.probe);
+  $('list-count').textContent = total === 0 ? 'This list has no games yet.'
+    : `${n === 0 ? 'None' : n.toLocaleString()} of its ${count(total, 'game')} ${n === 1 ? 'is' : 'are'} in your folder${reading ? ' so far' : ''}.`;
+  const tick = $('list-tick');
+  tick.hidden = toTick === 0;
+  tick.textContent = toTick < copyable ? `Tick the other ${toTick.toLocaleString()}` : toTick === 1 ? 'Tick it' : 'Tick them';
+
+  const missing = list.games.filter((_, i) => !found.has(i));
+  const toggle = $('list-show-missing');
+  toggle.hidden = missing.length === 0;
+  toggle.textContent = `${missingShown ? 'Hide' : 'Show'} the ${missing.length === 1 ? 'one' : missing.length.toLocaleString()} that ${missing.length === 1 ? "isn't" : "aren't"}`;
+  toggle.setAttribute('aria-expanded', String(missingShown));
+  $('list-missing').hidden = !missingShown || missing.length === 0;
+  const titles = missing.map((g) => g.title).join('\n');
+  if (missingShown && titles !== missingShowing) {
+    missingShowing = titles;
+    $('list-missing-titles').replaceChildren(...missing.map((g) => Object.assign(document.createElement('li'), { textContent: g.title })));
+  }
+
+  const own = state.listKind === 'own';
+  $('list-from-gameferry').hidden = own;
+  $('list-copy').hidden = own;
+  $('list-add').hidden = !own;
+  $('list-remove').hidden = !own;
+  $('list-delete').hidden = !own;
+}
+
+/** @param {string | null} text */
+function showListProblem(text) {
+  $('list-problem').hidden = !text;
+  $('list-problem').textContent = text ?? '';
+}
+
+/** The ticked games that have been identified, as a list's games: the exact disc of each. */
+function tickedGames() {
+  /** @type {Map<string, import('./lists.js').ListGame>} */
+  const games = new Map();
+  for (const item of state.items) {
+    const id6 = item.probe?.id6;
+    if (id6 && !item.probe?.problem && ticked(item) && !games.has(id6)) games.set(id6, { ids: [id6], title: title(item) });
+  }
+  return [...games.values()];
+}
+
+/** An ID for a list made here that no other list has. */
+function newListId() {
+  let id;
+  do id = `own-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`; while (ownLists.some((l) => l.id === id));
+  return id;
+}
+
+$('list-pick').addEventListener('change', (/** @type {Event} */ event) => {
+  const value = /** @type {HTMLSelectElement} */ (event.target).value;
+  if (value !== 'new' && value !== 'open') {
+    chooseList(value);
+    return;
+  }
+  showListChoices(); // back to the list shown
+  if (value === 'open') {
+    $('list-file').click();
+    return;
+  }
+  const games = tickedGames();
+  if (games.length === 0) {
+    showListProblem('Tick the games for the new list first, then choose “New list from the ticked games” again.');
+    return;
+  }
+  showListProblem(null);
+  $('list-new-count').textContent = games.length === 1 ? 'The ticked game goes in it.' : `The ${games.length.toLocaleString()} ticked games go in it.`;
+  $('list-new').hidden = false;
+  const name = /** @type {HTMLInputElement} */ ($('list-new-name'));
+  name.value = '';
+  name.focus();
+});
+
+$('list-new').addEventListener('submit', async (/** @type {Event} */ event) => {
+  event.preventDefault();
+  const name = /** @type {HTMLInputElement} */ ($('list-new-name')).value.trim();
+  const games = tickedGames();
+  if (!name || games.length === 0) return;
+  const list = { id: newListId(), name: name.slice(0, 80), description: '', games };
+  ownLists.push(list);
+  chooseList(listKey(list, 'own'));
+  await keepOwnLists();
+});
+
+$('list-new-cancel').addEventListener('click', () => {
+  $('list-new').hidden = true;
+});
+
+$('list-tick').addEventListener('click', () => {
+  for (const item of state.items) {
+    if (!inList(item) || !canCopy(item) || item.selected) continue;
+    item.selected = true;
+    fillRow(item);
+  }
+  summarize();
+});
+
+$('list-show-missing').addEventListener('click', () => {
+  missingShown = !missingShown;
+  missingShowing = '';
+  showList();
+});
+
+$('list-copy').addEventListener('click', async () => {
+  const list = state.list;
+  if (!list) return;
+  const copy = { id: newListId(), name: list.name, description: list.description, games: list.games.map((g) => ({ ids: [...g.ids], title: g.title })) };
+  ownLists.push(copy);
+  chooseList(listKey(copy, 'own'));
+  await keepOwnLists();
+});
+
+$('list-add').addEventListener('click', async () => {
+  const list = state.list;
+  const match = state.listMatch;
+  if (!list || !match || state.listKind !== 'own') return;
+  const chosen = tickedGames();
+  const games = chosen.filter((g) => match(g.ids[0]) < 0);
+  if (games.length === 0) {
+    showListProblem(chosen.length ? 'The ticked games are all in this list already.' : 'Tick the games to add under “All games”, then come back to this list.');
+    return;
+  }
+  showListProblem(null);
+  list.games.push(...games);
+  await listChanged();
+});
+
+$('list-remove').addEventListener('click', async () => {
+  const list = state.list;
+  const match = state.listMatch;
+  if (!list || !match || state.listKind !== 'own') return;
+  const out = new Set(tickedGames().map((g) => match(g.ids[0])).filter((i) => i >= 0));
+  if (out.size === 0) {
+    showListProblem('Tick the games to take out of this list first.');
+    return;
+  }
+  showListProblem(null);
+  list.games = list.games.filter((_, i) => !out.has(i));
+  await listChanged();
+});
+
+$('list-save').addEventListener('click', () => {
+  const list = state.list;
+  if (!list) return;
+  const url = URL.createObjectURL(new Blob([listFile(list)], { type: 'application/json' }));
+  const link = Object.assign(document.createElement('a'), { href: url, download: listFileName(list) });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+});
+
+$('list-delete').addEventListener('click', async () => {
+  const list = state.list;
+  if (!list || state.listKind !== 'own') return;
+  if (!confirm(`Delete the list “${list.name}”? Only the list goes; the games stay where they are.`)) return;
+  ownLists = ownLists.filter((l) => l !== list);
+  chooseList('');
+  await keepOwnLists();
+});
+
+$('list-file').addEventListener('change', async (/** @type {Event} */ event) => {
+  const input = /** @type {HTMLInputElement} */ (event.target);
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  try {
+    if (file.size > 2 << 20) throw new Error('it is too big to be a list');
+    let data;
+    try {
+      data = JSON.parse(await file.text());
+    } catch {
+      throw new Error("it isn't a GameFerry list");
+    }
+    const list = parseList(data);
+    list.id = newListId();
+    ownLists.push(list);
+    chooseList(listKey(list, 'own'));
+    await keepOwnLists();
+  } catch (error) {
+    showListProblem(`${file.name} couldn't be opened as a list: ${/** @type {Error} */ (error).message}.`);
+  }
+});
+
+/** Fetches the GameFerry lists, falling back on the copy kept from the last time they could be fetched. */
+async function loadBuiltInLists() {
+  try {
+    builtInLists = await fetchLists(readSetting('lists-url') || LISTS_URL);
+    builtInProblem = null;
+    await store.save('lists-builtin', builtInLists);
+  } catch (error) {
+    const kept = await store.load('lists-builtin');
+    builtInLists = Array.isArray(kept) ? kept : [];
+    builtInProblem = /** @type {Error} */ (error).message;
+  }
+  builtInLoading = false;
+  showListChoices();
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -959,6 +1286,15 @@ async function restore(key, mode, buttonId, use, drive) {
 picks = new Set((await store.load('picks')) ?? []);
 picksSaved = JSON.stringify([...picks].sort());
 picksLoaded = true;
+/** @type {HTMLAnchorElement} */ ($('list-about')).href = LISTS_ABOUT;
+ownLists = (await store.load('lists-own')) ?? [];
+showListChoices();
+// The list chosen last time comes back: one made here at once, a GameFerry list once the lists have been fetched.
+if (readSetting('list')?.startsWith('own:')) chooseList(/** @type {string} */ (readSetting('list')));
+loadBuiltInLists().then(() => {
+  const chosen = readSetting('list');
+  if (chosen?.startsWith('builtin:') && !state.list) chooseList(chosen);
+});
 applyCovers();
 renderGames();
 renderCard();
