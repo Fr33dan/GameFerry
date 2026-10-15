@@ -46,6 +46,8 @@ const state = {
   copying: false,
   cancelled: false,
   /** Whether the lists show covers from GameTDB; remembered in this browser. */ showCovers: readSetting('covers') !== 'off',
+  /** Whether the list hides games that aren't ticked. */ onlyTicked: false,
+  /** @type {{key: string | null, descending: boolean}} How the list is sorted; remembered in this browser. */ sort: readSort(),
 };
 
 // The folder APIs only exist on secure pages (https, or localhost); on plain http they are missing in any browser.
@@ -122,7 +124,8 @@ async function loadSource(folder) {
   if (listing !== state.listing) return;
   state.looking = null;
   found.sort((a, b) => a.name.localeCompare(b.name));
-  await addGames(found, found.length <= TICK_UP_TO);
+  // A small folder starts with every game ticked, unless ticks for it are remembered from before.
+  await addGames(found, found.length <= TICK_UP_TO && !found.some((handle) => picks.has(handle.name)));
 }
 
 /**
@@ -138,7 +141,7 @@ async function addGames(handles, tick) {
   for (const handle of handles) {
     if (names.has(handle.name)) continue;
     names.add(handle.name);
-    added.push({ name: handle.name, handle, file: null, probe: null, known: null, reading: null, tick, selected: false, status: 'Not read yet', state: 'waiting' });
+    added.push({ name: handle.name, handle, file: null, probe: null, known: null, reading: null, tick: tick || picks.has(handle.name), selected: false, status: 'Not read yet', state: 'waiting' });
   }
 
   const remembered = await store.loadMany(added.map((i) => `game:${i.name}`));
@@ -153,8 +156,76 @@ async function addGames(handles, tick) {
 
   state.items.push(...added);
   state.toRead.push(...added);
+  sortItems();
   renderGames();
   readMore();
+}
+
+/**
+ * File names of the ticked games, kept in this browser so that ticks survive a reload (to update the page in the
+ * middle of a batch, say). Games ticked earlier that aren't in the list now keep their place, for when they are back.
+ */
+let picks = new Set();
+let picksLoaded = false;
+let picksSaved = '';
+let picksSaving = 0;
+
+/** Brings the remembered ticks up to date with the list, and saves them a moment later if they changed. */
+function rememberPicks() {
+  if (!picksLoaded) return;
+  for (const item of state.items) {
+    // A game not read yet hasn't had its tick decided.
+    if (item.state === 'waiting' || item.state === 'reading') continue;
+    if (item.selected) picks.add(item.name);
+    else picks.delete(item.name);
+  }
+  const names = [...picks].sort();
+  const json = JSON.stringify(names);
+  if (json === picksSaved) return;
+  picksSaved = json;
+  clearTimeout(picksSaving);
+  picksSaving = setTimeout(() => store.save('picks', names), 500);
+}
+
+/** The order of the statuses when sorting by status: games that can be copied first. */
+const STATE_ORDER = ['ready', 'failed', 'busy', 'reading', 'waiting', 'done', 'skip'];
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+/** Puts the list in the order last chosen by clicking a column heading; until one is, it stays in file-name order. */
+function sortItems() {
+  const { key, descending } = state.sort;
+  if (!key) return;
+  /** @param {Item} item @returns {string | number} */
+  const value = (item) => key === 'id' ? item.probe?.id6 ?? ''
+    : key === 'size' ? item.probe?.estimatedBytes ?? item.file?.size ?? 0
+    : key === 'status' ? STATE_ORDER.indexOf(item.state)
+    : title(item);
+  state.items.sort((a, b) => {
+    const x = value(a);
+    const y = value(b);
+    // Ties go by file name, so that the other way round is exactly the reverse.
+    const order = (typeof x === 'number' && typeof y === 'number' ? x - y : collator.compare(String(x), String(y))) || collator.compare(a.name, b.name);
+    return descending ? -order : order;
+  });
+}
+
+/** Marks the column the list is sorted by. */
+function showSort() {
+  for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll('#games button.sort'))) {
+    const active = button.dataset.sort === state.sort.key;
+    button.closest('th')?.setAttribute('aria-sort', active ? (state.sort.descending ? 'descending' : 'ascending') : 'none');
+  }
+}
+
+/** The sort order last chosen in this browser, or file-name order. */
+function readSort() {
+  try {
+    const saved = JSON.parse(readSetting('sort') ?? 'null');
+    if (['game', 'id', 'size', 'status'].includes(saved?.key)) return { key: saved.key, descending: saved.descending === true };
+  } catch {
+    // Unreadable: start from file-name order.
+  }
+  return { key: null, descending: false };
 }
 
 let reading = 0;
@@ -255,10 +326,16 @@ function title(item) {
  * @param {Item} item
  */
 function matches(item) {
+  if (state.onlyTicked && !ticked(item)) return false;
   if (state.filter.length === 0) return true;
   const text = `${item.name} ${item.probe?.discTitle ?? ''}`.toLowerCase();
   const id = item.probe?.id6?.toLowerCase() ?? '';
   return state.filter.every((word) => text.includes(word) || id.startsWith(word));
+}
+
+/** Ticked, or going to be once it has been read (a remembered tick, say). @param {Item} item */
+function ticked(item) {
+  return item.selected || (item.tick && (item.state === 'waiting' || item.state === 'reading'));
 }
 
 /** @type {WeakMap<Item, HTMLTableRowElement>} */
@@ -273,6 +350,7 @@ function renderGames() {
     body.append(emptyRow(5, state.looking !== null ? `Looking through ${state.folderName}…` : 'Choose the folder your games are in, or add files.'));
   }
   body.append(noMatch);
+  showSort();
   summarize();
 }
 
@@ -289,6 +367,7 @@ function makeRow(item) {
   box.type = 'checkbox';
   box.addEventListener('change', () => {
     item.selected = box.checked;
+    fillRow(item);
     summarize();
   });
   cell(row, '', 'check').append(box);
@@ -356,9 +435,13 @@ function summarize() {
 
   const shown = state.items.filter(matches);
   $('list-tools').hidden = total === 0;
-  $('filter-count').textContent = state.filter.length ? `${shown.length.toLocaleString()} of ${total.toLocaleString()} shown` : '';
+  $('filter-count').textContent = state.filter.length || state.onlyTicked ? `${shown.length.toLocaleString()} of ${total.toLocaleString()} shown` : '';
   noMatch.hidden = total === 0 || shown.length > 0;
-  noMatch.cells[0].textContent = `No games match “${$('filter').value.trim()}”.`;
+  const words = $('filter').value.trim();
+  noMatch.cells[0].textContent = !state.onlyTicked ? `No games match “${words}”.`
+    : words ? `No ticked games match “${words}”.`
+    : 'No games are ticked.';
+  rememberPicks();
 
   const choosable = shown.filter(canCopy);
   const all = /** @type {HTMLInputElement} */ ($('select-all'));
@@ -412,14 +495,35 @@ $('select-all').addEventListener('change', (/** @type {Event} */ event) => {
   summarize();
 });
 
-$('filter').addEventListener('input', (/** @type {Event} */ event) => {
-  state.filter = /** @type {HTMLInputElement} */ (event.target).value.toLowerCase().split(/\s+/).filter(Boolean);
+/** Shows or hides each row for the search box and "Only ticked". */
+function refilter() {
   for (const item of state.items) {
     const row = rows.get(item);
     if (row) row.hidden = !matches(item);
   }
   summarize();
+}
+
+$('filter').addEventListener('input', (/** @type {Event} */ event) => {
+  state.filter = /** @type {HTMLInputElement} */ (event.target).value.toLowerCase().split(/\s+/).filter(Boolean);
+  refilter();
 });
+
+$('only-ticked').addEventListener('change', (/** @type {Event} */ event) => {
+  state.onlyTicked = /** @type {HTMLInputElement} */ (event.target).checked;
+  refilter();
+});
+
+for (const button of /** @type {NodeListOf<HTMLButtonElement>} */ (document.querySelectorAll('#games button.sort'))) {
+  button.addEventListener('click', () => {
+    const key = button.dataset.sort ?? null;
+    // A second click on the same heading turns the order round. Copies go in the order shown.
+    state.sort = { key, descending: state.sort.key === key && !state.sort.descending };
+    writeSetting('sort', JSON.stringify(state.sort));
+    sortItems();
+    renderGames();
+  });
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // Card
@@ -841,6 +945,9 @@ async function restore(key, mode, buttonId, use, drive) {
   };
 }
 
+picks = new Set((await store.load('picks')) ?? []);
+picksSaved = JSON.stringify([...picks].sort());
+picksLoaded = true;
 applyCovers();
 renderGames();
 renderCard();
