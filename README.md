@@ -60,6 +60,13 @@ Run `ferry help` for every option.
 
 Big libraries work too, even on a network share. The games are listed at once. About 32 KB of each file is then read to identify the game, six files at a time, and the answers are kept in the browser, so later visits show the list straight away. A folder of more than 30 games starts with none ticked; the search box finds games by name, title or ID. Ticked games are remembered too, so reloading the page in the middle of a batch keeps them. Click a column heading to sort the list (games are copied in the order shown), and tick "Only ticked" to hide the rest.
 
+**Lists** help sort a big folder:
+
+- **GameFerry lists:** the List menu offers themed lists, such as party games or racing games. They are kept in their own repository, [GameFerry-lists](https://github.com/Fr33dan/GameFerry-lists), and fetched from there when the page opens (the last copy is kept for when that fails).
+- **What a list shows:** choosing one shows only its games that are in your folder, in the list's order. It says how many of the list that is, and can tick them all.
+- **Games you don't have:** their titles stay folded away, with no links. GameFerry is for backups of discs you own, and it never says where to find games.
+- **Your own lists:** make one from the ticked games, or copy a GameFerry list to change it. You can add or take out ticked games, and save a list as a file or open one. A list holds only titles and game IDs, so it can be shared or added to GameFerry-lists.
+
 The engine runs in the page as WebAssembly. It turns an NKit image straight into the WBFS file in a single pass: the full disc never exists as a file and no work folder is needed. Each game's archive is checked against its CRC as it is read, and every rebuilt part of the disc is checked against the disc's own hash table.
 
 Differences from the desktop app:
