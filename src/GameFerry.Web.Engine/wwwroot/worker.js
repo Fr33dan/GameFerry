@@ -185,7 +185,7 @@ async function findSwap(folder, name, size) {
 
 /** Removes the file of that name if it is empty. Returns whether no empty file of that name is left. */
 async function clearEmpty(folder, name) {
-  const file = await folder.getFileHandle(name).then((handle) => handle.getFile(), () => null);
+  const file = await folder.getFileHandle(name).then((handle) => handle.getFile()).catch(() => null);
   if (file?.size !== 0) return true;
   return folder.removeEntry(name).then(() => true, () => false);
 }
