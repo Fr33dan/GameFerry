@@ -74,6 +74,8 @@ Differences from the desktop app:
 
 Copies come out byte for byte the same as the desktop app's, apart from one region. On desktop, the dropped update partition's first 1.7 MB stay in the first 2 MB block, which no loader reads; the web version leaves zeros there.
 
+The browser writes each file under a temporary name (`name.crswap`) and gives it its real name at the end, after reading it back for a Safe Browsing check. If something else, such as antivirus, has the file open at that moment, that last step fails. GameFerry then renames the file itself a little later; the log says how each try went. If every try fails, the row says which file to rename by hand. The data is complete, so nothing has to be copied again.
+
 ## What happens to each game
 
 1. **Extract** (archives only) — 7-Zip unpacks the image into the work folder.

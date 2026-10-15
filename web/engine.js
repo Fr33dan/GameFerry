@@ -29,12 +29,20 @@
  * @property {number} [groupsChecked]
  * @property {number} [groupsFailing]
  * @property {string[]} [warnings]
- * @property {{name: string, problem: string, renamed?: number, leftover?: string | null}[]} [savedAgain]
- *   Files the browser wrote but couldn't give their real names, which were then saved from its swap files: renamed
- *   (`renamed` says on which try) or copied again. `leftover` names a first swap file the browser wouldn't let go of yet.
- * @property {{name: string, swap: string | null, emptyLeft?: boolean, problem: string}[]} [unsaved]
- *   Files that couldn't be saved at all. While the page stays open, the browser's swap file (`swap`) still holds the
- *   whole file and can be renamed to `name` by hand, once the empty file of that name is deleted (`emptyLeft`).
+ * @property {{name: string, problem: string, tries: RenameTry[]}[]} [savedAgain]
+ *   Files the browser wrote but couldn't give their real names, which GameFerry then renamed from their swap files.
+ *   The last of the `tries` worked.
+ * @property {{name: string, problem: string, tries: RenameTry[], swap: string | null, emptyLeft?: boolean}[]} [unsaved]
+ *   Files that couldn't be saved at all. The browser's swap file (`swap`) still holds the whole file and can be renamed
+ *   to `name` by hand, once the empty file of that name is deleted (`emptyLeft`).
+ */
+
+/**
+ * @typedef {object} RenameTry  One try at renaming a swap file onto its real name.
+ * @property {number} pause  Seconds waited before it.
+ * @property {number} seconds  How long it took: the browser reads the whole file again first.
+ * @property {string} [problem]  Why it failed, if it did.
+ * @property {boolean} [same]  Whether it failed the way closing the file had.
  */
 
 export class Engine {
@@ -46,11 +54,12 @@ export class Engine {
     this.pending = new Map();
     /** @type {((source: number, written: number) => void) | null} */
     this.onProgress = null;
-    /** @type {((name: string, done: number, total: number) => void) | null} While a file is saved again. */
-    this.onSaving = null;
     /** @type {((name: string, size: number) => void) | null} As each file is closed, which can take minutes. */
     this.onFinishing = null;
-    /** @type {((name: string, attempt: number, of: number, pause: number) => void) | null} Before each try at renaming a file's swap file. */
+    /**
+     * @type {((name: string, attempt: number, of: number, pause: number) => void) | null} Before each try at renaming a
+     * file's swap file, with the pause before it, and again with a pause of 0 as the try starts.
+     */
     this.onRenaming = null;
 
     /** @type {Promise<void>} Settles once the .NET runtime has loaded in the worker. */
@@ -68,10 +77,6 @@ export class Engine {
     }
     if (message.kind === 'progress') {
       this.onProgress?.(message.source, message.written);
-      return;
-    }
-    if (message.kind === 'saving') {
-      this.onSaving?.(message.name, message.done, message.total);
       return;
     }
     if (message.kind === 'finishing') {

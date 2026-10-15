@@ -8,8 +8,8 @@
 //               { kind: 'cancel' }
 // Messages out: { id, result } or { id, error, name }; during a transfer { kind: 'progress', source, written },
 //               { kind: 'finishing', name, size } as each file is closed (see finish), and after closing failed,
-//               { kind: 'renaming', name, attempt, of, pause } before each try at renaming its swap file, or
-//               { kind: 'saving', name, done, total } while it is copied again (see saveAgain).
+//               { kind: 'renaming', name, attempt, of, pause } before each try at renaming its swap file (pause 0
+//               once the try itself starts; see saveAgain).
 import { dotnet } from './_framework/dotnet.js';
 
 /** How much of each end of a file a probe reads ahead: a 7z's table of contents and an image's header fit easily. */
@@ -86,8 +86,8 @@ async function discardParts() {
 
 /**
  * Closes every part, which is when Chrome gives the file its real name: until then the data is in a swap file beside
- * it (name.crswap). That last step can fail on its own, for instance if something else has the file open at that
- * moment, so a part that fails is saved again from its swap file (see saveAgain).
+ * it (name.crswap). That last step can fail on its own, when something else has the file open at that moment, so a
+ * part that fails is renamed from its swap file afterwards (see saveAgain).
  * @returns {Promise<{savedAgain: object[], unsaved: object[]}>}
  */
 async function commitParts() {
@@ -101,10 +101,10 @@ async function commitParts() {
     try {
       await finish(writable, name, target.sizes[part]);
     } catch (error) {
-      const problem = `${describe(error)} (after ${Math.round((performance.now() - started) / 1000)} s)`;
-      const outcome = await saveAgain(name, target.sizes[part], writable);
-      if (outcome.saved) savedAgain.push({ name, problem, leftover: outcome.leftover, renamed: outcome.renamed });
-      else unsaved.push({ name, swap: outcome.swap, emptyLeft: outcome.emptyLeft, problem: outcome.problem ? `${problem}; then ${outcome.problem}` : problem });
+      const problem = `${describe(error)} (after ${since(started)} s)`;
+      const outcome = await saveAgain(name, target.sizes[part], describe(error));
+      if (outcome.saved) savedAgain.push({ name, problem, tries: outcome.tries });
+      else unsaved.push({ name, problem, tries: outcome.tries, swap: outcome.swap, emptyLeft: outcome.emptyLeft });
     }
   }
   return { savedAgain, unsaved };
@@ -112,8 +112,8 @@ async function commitParts() {
 
 /**
  * Closes a written file, which is when Chrome reads the whole file back (a Safe Browsing check) and then renames its
- * swap file. That rename now and then fails, most often on big files; saveAgain copes with it. The page is told, as
- * the status would otherwise sit at 100% for minutes.
+ * swap file. That rename now and then fails; saveAgain copes with it. The page is told, as the status would otherwise
+ * sit at 100% for minutes.
  * @param {FileSystemWritableFileStream} writable @param {string} name @param {number} size
  */
 async function finish(writable, name, size) {
@@ -121,11 +121,11 @@ async function finish(writable, name, size) {
   await writable.close();
 }
 
-/** Writables whose closing failed. They are kept while the page is open, because Chrome deletes their swap files when they go. */
-const stranded = new Set();
-
 /** How long to wait before each try at renaming a swap file, in seconds. */
-const RENAME_PAUSES = [5, 20, 60];
+const RENAME_PAUSES = [5, 30, 120];
+
+/** Errors after which another try can't help: the swap file is gone, or the browser won't rename files here. */
+const RENAME_STOPS = new Set(['NotFoundError', 'NotAllowedError', 'SecurityError', 'TypeError', 'NotSupportedError']);
 
 /**
  * Saves a part after closing it failed. Closing is when Chrome reads the file back and renames its swap file
@@ -133,45 +133,42 @@ const RENAME_PAUSES = [5, 20, 60];
  * file, which survives only because something else, most likely antivirus, still has it open; renaming it by hand
  * later works.
  *
- * So the swap file is renamed here, after a pause for whatever has it to let go, and again after longer pauses if
- * need be. Each try costs Chrome one more read of the file, but nothing is written again. Only where renaming is not
- * possible at all (the failed writable still holds the file, or the browser can't move files) is the swap file copied
- * to the real name through a fresh writable instead. If nothing works, the failed writable is kept, so the swap file
- * stays and can be renamed by hand.
- * @param {string} name @param {number} size @param {FileSystemWritableFileStream} failed
- * @returns {Promise<{saved: boolean, swap: string | null, renamed?: number, leftover?: string | null, emptyLeft?: boolean, problem?: string}>}
+ * So the swap file is renamed here, after a pause for whatever has it to let go, and again after longer pauses if need
+ * be. Each try costs Chrome one more read of the file, but nothing is written again. Every try is reported, with how
+ * long it took and why it failed, for the log.
+ * @param {string} name @param {number} size @param {string} closing How closing failed.
+ * @returns {Promise<{saved: boolean, swap: string | null, tries: {pause: number, seconds: number, problem?: string, same?: boolean}[], emptyLeft?: boolean}>}
  */
-async function saveAgain(name, size, failed) {
-  stranded.add(failed);
+async function saveAgain(name, size, closing) {
   const folder = target.folder;
-  let swap = null;
-  try {
-    const found = await findSwap(folder, name, size);
-    if (!found) return { saved: false, swap: null, problem: 'its swap file could not be found' };
-    swap = found.entry;
-
-    const renaming = await renameSwap(folder, found.handle, name);
-    if (renaming.tries) {
-      stranded.delete(failed);
-      return { saved: true, swap, renamed: renaming.tries };
-    }
-    if (renaming.error) {
-      throw Object.assign(new Error(`renaming its swap file failed ${RENAME_PAUSES.length} times, the last time with ${describe(renaming.error)}`), { name: 'RenameError' });
-    }
-
-    await copyAgain(folder, found.file, name, size);
-    stranded.delete(failed);
-    await failed.abort().catch(() => {});
-    // The first try's swap file is no longer needed, but Chrome may not let it go until its writable does.
-    const leftover = await folder.removeEntry(swap).then(() => null, (error) => (error?.name === 'NotFoundError' ? null : swap));
-    return { saved: true, swap, leftover };
-  } catch (error) {
-    // The empty file made at the start would be in the way of renaming the swap file by hand. The browser may not
-    // let it go while the failed writable lasts; then whoever renames the swap file has to delete it first.
-    const empty = async () => (await folder.getFileHandle(name).then((handle) => handle.getFile(), () => null))?.size === 0;
-    if (await empty()) await folder.removeEntry(name).catch(() => {});
-    return { saved: false, swap, emptyLeft: await empty(), problem: error?.name === 'RenameError' ? error.message : `saving again: ${describe(error)}` };
+  const found = await findSwap(folder, name, size).catch(() => null);
+  if (!found) {
+    // Nothing to rename, so the empty file the copy started with would only look like a broken game.
+    await clearEmpty(folder, name);
+    return { saved: false, swap: null, tries: [] };
   }
+  const tries = [];
+  for (const [i, pause] of RENAME_PAUSES.entries()) {
+    postMessage({ kind: 'renaming', name, attempt: i + 1, of: RENAME_PAUSES.length, pause });
+    await new Promise((resolve) => setTimeout(resolve, pause * 1000));
+    postMessage({ kind: 'renaming', name, attempt: i + 1, of: RENAME_PAUSES.length, pause: 0 });
+    const started = performance.now();
+    try {
+      // The empty file the copy started with: out of the way now, so that renaming by hand works if this doesn't.
+      await clearEmpty(folder, name);
+      // Into the folder's handle, not move(name): Chrome checks a plain rename against the file's path, and when the
+      // card was picked as a whole drive that check never reaches the drive's permission, so it is refused.
+      // @ts-ignore: move() is Chromium's.
+      await found.handle.move(folder, name);
+      tries.push({ pause, seconds: since(started) });
+      return { saved: true, swap: found.entry, tries };
+    } catch (error) {
+      const problem = describe(error);
+      tries.push({ pause, seconds: since(started), problem, same: problem === closing });
+      if (RENAME_STOPS.has(error?.name)) break;
+    }
+  }
+  return { saved: false, swap: found.entry, tries, emptyLeft: !(await clearEmpty(folder, name)) };
 }
 
 /** The swap file holding a part: the right size, and the newest if an earlier copy left one too. */
@@ -186,66 +183,16 @@ async function findSwap(folder, name, size) {
   return newest;
 }
 
-/**
- * Renames a swap file onto its real name, waiting before each try. Returns the number of tries it took; or, if every
- * try failed the way closing had, that error; or neither, if renaming can't work here at all.
- * @param {FileSystemDirectoryHandle} folder @param {FileSystemFileHandle} handle @param {string} name
- * @returns {Promise<{tries?: number, error?: Error}>}
- */
-async function renameSwap(folder, handle, name) {
-  // @ts-ignore: move() is Chromium's.
-  if (typeof handle.move !== 'function') return {};
-  let failure;
-  for (const [i, pause] of RENAME_PAUSES.entries()) {
-    postMessage({ kind: 'renaming', name, attempt: i + 1, of: RENAME_PAUSES.length, pause });
-    await new Promise((resolve) => setTimeout(resolve, pause * 1000));
-    const started = performance.now();
-    try {
-      // The empty file the copy started with is in the way.
-      const existing = await folder.getFileHandle(name).then((h) => h.getFile(), () => null);
-      if (existing?.size === 0) await folder.removeEntry(name);
-      // @ts-ignore: move() is Chromium's.
-      await handle.move(name);
-      return { tries: i + 1 };
-    } catch (error) {
-      // Only the failure closing had is worth waiting out; anything else means renaming can't work here.
-      if (error?.name !== 'InvalidStateError') return {};
-      failure = timed(error, started);
-    }
-  }
-  return { error: failure };
+/** Removes the file of that name if it is empty. Returns whether no empty file of that name is left. */
+async function clearEmpty(folder, name) {
+  const file = await folder.getFileHandle(name).then((handle) => handle.getFile(), () => null);
+  if (file?.size !== 0) return true;
+  return folder.removeEntry(name).then(() => true, () => false);
 }
 
-/** Copies a swap file to the real name through a fresh writable, showing how far it has got. */
-async function copyAgain(folder, file, name, size) {
-  let done = 0;
-  let shown = 0;
-  const counting = new TransformStream({
-    transform(chunk, controller) {
-      done += chunk.length;
-      if (done - shown >= 16 << 20 || done === size) {
-        shown = done;
-        postMessage({ kind: 'saving', name, done, total: size });
-      }
-      controller.enqueue(chunk);
-    },
-  });
-  const writable = await (await folder.getFileHandle(name, { create: true })).createWritable({ keepExistingData: false });
-  const started = performance.now();
-  try {
-    await file.stream().pipeThrough(counting).pipeTo(writable, { preventClose: true });
-    await finish(writable, name, size);
-  } catch (error) {
-    await writable.abort().catch(() => {});
-    throw timed(error, started);
-  }
-}
-
-/** The error with how long the step took added, for the log. A DOMException's message can't be changed, so on a copy. */
-function timed(error, started) {
-  const copy = new Error(`${String(error?.message ?? error).replace(/\.$/, '')} (after ${Math.round((performance.now() - started) / 1000)} s)`);
-  copy.name = error?.name ?? 'Error';
-  return copy;
+/** Whole seconds since a performance.now() time. */
+function since(started) {
+  return Math.round((performance.now() - started) / 1000);
 }
 
 /** @param {any} error */
