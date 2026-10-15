@@ -58,7 +58,7 @@ Run `ferry help` for every option.
 
 `web/` is the same tool as a web page that runs entirely on your computer. It works in Chrome, Edge, Brave and Opera on Windows, macOS, Linux and ChromeOS, which can write to folders you choose. Choose the folder with your games, choose the card and press **Copy**. Nothing is uploaded, and there is nothing to install.
 
-Big libraries work too, even on a network share. The games are listed at once. About 32 KB of each file is then read to identify the game, six files at a time, and the answers are kept in the browser, so later visits show the list straight away. A folder of more than 30 games starts with none ticked; the search box finds games by name, title or ID.
+Big libraries work too, even on a network share. The games are listed at once. About 32 KB of each file is then read to identify the game, six files at a time, and the answers are kept in the browser, so later visits show the list straight away. A folder of more than 30 games starts with none ticked; the search box finds games by name, title or ID. Ticked games are remembered too, so reloading the page in the middle of a batch keeps them. Click a column heading to sort the list (games are copied in the order shown), and tick "Only ticked" to hide the rest.
 
 The engine runs in the page as WebAssembly. It turns an NKit image straight into the WBFS file in a single pass: the full disc never exists as a file and no work folder is needed. Each game's archive is checked against its CRC as it is read, and every rebuilt part of the disc is checked against the disc's own hash table.
 

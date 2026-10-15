@@ -41,17 +41,18 @@
       <div class="progress slim" id="read-progress" role="progressbar" aria-label="Reading the games" aria-valuemin="0" aria-valuemax="100" hidden><div id="read-bar"></div></div>
       <div class="list-tools" id="list-tools" hidden>
         <input type="search" id="filter" placeholder="Search by name or ID" aria-label="Search the games" autocomplete="off" spellcheck="false">
+        <label class="option"><input type="checkbox" id="only-ticked"> Only ticked</label>
         <span class="hint" id="filter-count"></span>
       </div>
       <div class="table-wrap">
         <table id="games">
           <thead>
             <tr>
-              <th class="check"><input type="checkbox" id="select-all" aria-label="Select every game"></th>
-              <th>Game</th>
-              <th>ID</th>
-              <th class="number">Size</th>
-              <th>Status</th>
+              <th class="check"><input type="checkbox" id="select-all" aria-label="Select every game shown"></th>
+              <th aria-sort="none"><button type="button" class="sort" data-sort="game">Game</button></th>
+              <th aria-sort="none"><button type="button" class="sort" data-sort="id">ID</button></th>
+              <th class="number" aria-sort="none"><button type="button" class="sort" data-sort="size">Size</button></th>
+              <th aria-sort="none"><button type="button" class="sort" data-sort="status">Status</button></th>
             </tr>
           </thead>
           <tbody></tbody>
